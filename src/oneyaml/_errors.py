@@ -70,10 +70,17 @@ def make_error(
     events: list[str] | None = None,
 ) -> YAMLError:
     """Build the exception class that fits the category (used by the native backend too)."""
+    construct = category == "construct"
+    if construct:
+        # A value that does not fit its tag, met while building values: a syntax error to the
+        # caller. The compat modules read the mark to call it a construction error.
+        category = "syntax"
     if category == "limit":
         cls = LimitError
     elif category in _PARSE:
         cls = ParseError
     else:
         cls = YAMLError
-    return cls(message, category=category, line=line, column=column, offset=offset, events=events)
+    err = cls(message, category=category, line=line, column=column, offset=offset, events=events)
+    err.construct = construct
+    return err

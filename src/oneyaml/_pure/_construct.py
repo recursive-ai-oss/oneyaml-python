@@ -193,6 +193,13 @@ def _build(  # noqa: C901
                                     v = "<<"
                 else:
                     v = tagged_scalar(tag, v, cap, wide)
+                    if v is MERGE:  # the tag !!merge
+                        if stack and stack[-1][1][0] == MAP_START and not len(cur) & 1:
+                            merge_seen = True
+                        else:
+                            raise Fail(
+                                "the merge tag is only meaningful on a mapping key", "construct"
+                            )
                 add(v)
                 a = e[4]
                 if a is not None:
@@ -229,9 +236,11 @@ def _build(  # noqa: C901
             elif k == ALIAS:
                 v = anchors.get(e[3], missing)
                 if v is _OPEN:
-                    raise Fail(f"the alias {e[3]} refers to a node that contains it", "syntax")
+                    raise Fail(f"alias *{e[3]} refers to a node that contains it", "syntax")
                 if v is missing:
-                    raise Fail(f"the alias {e[3]} has no anchor", "syntax")
+                    raise Fail(f"alias *{e[3]} has no anchor", "syntax")
+                if v is MERGE:
+                    raise Fail("an alias to a merge key cannot be constructed", "construct")
                 ent = info.get(id(v))
                 if ent is None:
                     nodes, size, height = 1, _bytes(v), 0
@@ -239,7 +248,7 @@ def _build(  # noqa: C901
                     nodes, size, height = ent[0], ent[1], ent[2]
                 # The shared object nests as deep as the anchored one, wherever it is used.
                 if depth is not None and len(stack) + height > depth:
-                    raise Fail(f"the alias nests deeper than the limit of {depth}", "limit")
+                    raise Fail(f"alias nests deeper than the limit of {depth}", "limit")
                 # What a copy would hold: loading is cheap because of the sharing, but whoever
                 # walks the result (a dump, a comparison) pays for the expansion.
                 charged_nodes += nodes
@@ -271,7 +280,7 @@ def _build(  # noqa: C901
             buf = cur
             cur, e0 = pop()
             if e0[0] == MAP_START:
-                _map(buf[: len(buf) // 2 * 2], e0, e0, events, info, wide, intern_key)
+                make_map(buf[: len(buf) // 2 * 2], e0, e0, events, info, wide, intern_key)
     except Fail as exc:
         if exc.offset is None:
             exc.offset = _offset(e)

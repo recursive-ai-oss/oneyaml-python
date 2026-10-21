@@ -418,15 +418,7 @@ def test_large_input_reads_the_same(api):
 # ---- both backends, same answers ---------------------------------------------------------------
 
 
-def test_backends_agree_on_the_yaml11_documents():
-    docs = [
-        "a: 1\nb: [yes, 0b11, 017, 1_0, 1:30, 2001-01-01, .5e+2]\n",
-        "base: &b {x: 1}\nd: {<<: [*b, {y: 2}], x: 3}\n",
-        "s: !!set {a, b}\no: !!omap [{a: 1}]\nb: !!binary aGk=\n",
-        "k: 1\nk: 2\n",
-        "? [a, b]\n: !!set {c}\n? !!omap [{a: 1}]\n: 2\n",
-        "a: " + "9" * 30 + "\nb: 0x" + "f" * 30 + "\nc: 1" + ":59" * 12 + "\n",
-    ]
+def _backends():
     import oneyaml._pure as pure
 
     mods = [pure]
@@ -436,20 +428,222 @@ def test_backends_agree_on_the_yaml11_documents():
         mods.append(native)
     except ImportError:
         pass
+    return mods
+
+
+def detail(mod, text, schema, multi=False, limits=None):
+    """What a backend answers, with everything an error says about where."""
+    try:
+        return "ok", mod.load(text, limits or _api._DEFAULT_LIMITS, multi, schema)
+    except oneyaml.YAMLError as exc:
+        return "err", (exc.category, exc.line, exc.column, getattr(exc, "construct", False))
+
+
+def assert_same_answer(text, schema, multi=False, limits=None, parser_positions=True):
+    """Both backends answer alike. The positions of errors the parser finds are the engine's
+    own (some are listed as known differences), so a caller going through many inputs can leave
+    them out: everything else, including where a value is refused, must agree."""
+    first, *rest = (detail(m, text, schema, multi, limits) for m in _backends())
+    for other in rest:
+        assert other[0] == first[0], (schema, text, first, other)
+        if first[0] == "ok":
+            assert same(first[1], other[1]), (schema, text)
+        elif parser_positions or first[1][0] != "syntax" or first[1][3]:
+            assert first[1] == other[1], (schema, text, first, other)
+        else:
+            assert first[1][0] == other[1][0] and first[1][3] == other[1][3], (text, first, other)
+    return first
+
+
+# Each of these once differed between the backends, or escaped as a bare exception.
+REPRO_DOCS = [
+    "&m <<: {a: 1}\nx: *m\n",
+    "&m <<: {a: 1}\n? [*m]\n: 1\n",
+    "&m <<: {a: 1}\nb: {<<: *m}\n",
+    "&m <<: {a: 1}\nb: 2\n",
+    "!!merge <<: {a: 1}\nb: 2\n",
+    "a: !!merge x\n",
+    "<<: x\nb: !!seq Y\n",
+    "<<: x\nb: *nope\n",
+    "<<: x\nb: [\n",
+    "<<: x\n",
+    "a: 1\na: 2\nb: [\n",
+    "a: 1\nb: 2\nb: 3\nc: [\n",
+    "k: 1" + ":01" * 40 + ".5\n",
+    "k: 1" + ":00" * 40 + ".5\n",
+    "k: 1" + ":30" * 21 + ".25\n",
+    "k: 1" + ":30" * 22 + ".25\n",
+    "k: 1" + ":59" * 300 + "\n",
+    "k: 1" + ":01" * 20000 + "\n",
+    "k: 1" + ":01" * 20000 + ".5\n",
+    "k: !!int 1" + ":01" * 20000 + "\n",
+    "k: !!int 12345678\n",
+    "k: !!int 0x" + "f" * 50 + "\n",
+    "k: 0x" + "f" * 50 + "\n",
+    "k: 0b" + "1" * 200 + "\n",
+    "k: " + "7" * 5000 + "\n",
+    "k: 0" + "7" * 5000 + "\n",
+    "k: 0x1F\n",
+    "k: 1_000\n",
+    "k: 2001-13-45\n",
+    "k: !!timestamp x\n",
+]
+
+
+@pytest.mark.parametrize("text", REPRO_DOCS)
+@pytest.mark.parametrize("schema", ["yaml11", "text", "core"])
+def test_backends_answer_alike_in_every_detail(text, schema):
+    assert_same_answer(text, schema)
+    assert_same_answer(text, schema, multi=True, limits=oneyaml.Limits.untrusted())
+    if schema != "core":  # the Core schema counts digits of 0x and 0o numbers differently
+        for digits in (3, 4, 30):
+            assert_same_answer(text, schema, limits=oneyaml.Limits(int_digits=digits))
+
+
+def test_backends_agree_on_the_yaml11_documents():
+    docs = [
+        "a: 1\nb: [yes, 0b11, 017, 1_0, 1:30, 2001-01-01, .5e+2]\n",
+        "base: &b {x: 1}\nd: {<<: [*b, {y: 2}], x: 3}\n",
+        "s: !!set {a, b}\no: !!omap [{a: 1}]\nb: !!binary aGk=\n",
+        "k: 1\nk: 2\n",
+        "? [a, b]\n: !!set {c}\n? !!omap [{a: 1}]\n: 2\n",
+        "a: " + "9" * 30 + "\nb: 0x" + "f" * 30 + "\nc: 1" + ":59" * 12 + "\n",
+    ]
     for text in docs:
-        results = []
         for schema in ("yaml11", "text", "core"):
-            per = [
-                outcome(
-                    lambda t, m=m, schema=schema: m.load(t, _api._DEFAULT_LIMITS, False, schema),
-                    text,
-                    ValueError,
-                )
-                for m in mods
-            ]
-            for r in per[1:]:
-                assert r[0] == per[0][0] and (r[0] != "ok" or same(per[0][1], r[1])), (schema, text)
-            results.append(per[0])
+            assert_same_answer(text, schema)
+
+
+# ---- merge keys, digit limits and long numbers: cases that once went wrong ------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "&m <<: {a: 1}\nx: *m\n",
+        "&m <<: {a: 1}\n? [*m]\n: 1\n",
+        "&m <<: {a: 1}\nb: {<<: *m}\n",
+        "&m <<: {a: 1}\nb: [*m]\n",
+    ],
+)
+def test_alias_to_a_merge_key_is_a_construction_error(api, text):
+    with pytest.raises(cy.ConstructorError):
+        cy.safe_load(text)
+    with pytest.raises(yaml.constructor.ConstructorError):
+        yaml.safe_load(text)
+
+
+def test_an_anchor_on_a_merge_key_is_harmless_unless_used(api):
+    assert cy.safe_load("&m <<: {a: 1}\nb: 2\n") == {"a": 1, "b": 2}
+    assert yaml.safe_load("&m <<: {a: 1}\nb: 2\n") == {"a": 1, "b": 2}
+
+
+def test_explicit_merge_tag_merges(api):
+    text = "base: &b {x: 1, y: 2}\nd:\n  !!merge <<: *b\n  y: 3\ne: {!!merge m: [*b]}\n"
+    assert cy.safe_load(text) == yaml.safe_load(text)
+    assert cy.safe_load(text)["d"] == {"x": 1, "y": 3}
+    with pytest.raises(cy.ConstructorError):
+        cy.safe_load("a: !!merge x\n")
+    with pytest.raises(cy.ConstructorError):
+        cy.safe_load("- !!merge x\n")
+
+
+def test_construction_errors_are_syntax_errors_with_the_construct_class(api):
+    for text in ("<<: 1\n", "a: !!int abc\n", "a: !!set [1]\n", "a: !tag x\n", "a: 2001-13-45\n"):
+        with pytest.raises(cy.ConstructorError) as info:
+            cy.safe_load(text)
+        assert info.value.category == "syntax", text
+        assert info.value.problem_mark is not None, text
+
+
+def test_the_unknown_alias_message_is_one_wording(api):
+    with pytest.raises(cy.ComposerError) as info:
+        cy.safe_load("a: *nope\n")
+    assert info.value.problem == "alias *nope has no anchor"
+    with pytest.raises(oneyaml.YAMLError) as info2:
+        api.loads("a: *nope\n")
+    assert info2.value.message == "alias *nope has no anchor"
+
+
+def test_long_sexagesimal_floats_never_overflow_or_make_nan(api):
+    for parts in (2, 5, 21, 22, 23, 30, 100, 170, 180, 400):
+        text = "k: 1" + ":30" * (parts - 1) + ".25\n"
+        ours_value = cy.safe_load(text)["k"]
+        assert not math.isnan(ours_value), parts
+        try:
+            theirs_value = yaml.safe_load(text)["k"]
+        except OverflowError:
+            assert ours_value == math.inf, parts  # PyYAML itself fails here
+        else:
+            assert ours_value == theirs_value, parts
+    assert cy.safe_load("k: -1" + ":00" * 400 + ".5\n")["k"] == -math.inf
+    assert cy.safe_load("k: 0" + ":00" * 400 + ".5\n")["k"] == 0.5
+
+
+def test_long_base60_integers_obey_the_digit_cap(api):
+    text = "k: 1" + ":01" * 300_000 + "\n"
+    for limits in (oneyaml.Limits(), oneyaml.Limits.untrusted(), oneyaml.Limits(int_digits=50)):
+        with pytest.raises(oneyaml.YAMLError) as info:
+            _api._impl.load(text, limits, False, "yaml11")
+        assert info.value.category == "limit"
+        assert info.value.line == 1 and info.value.column == 4
+    with pytest.raises(cy.ConstructorError) as again:
+        cy.safe_load("k: !!int 1" + ":01" * 300_000 + "\n")
+    assert again.value.category == "limit"
+    assert cy.safe_load("k: 1" + ":01" * 20)["k"] == _base60([1] + [1] * 20)
+
+
+def test_the_digit_cap_counts_the_decimal_digits_of_the_value(api):
+    # (text, fits under a cap of 3): hex, binary and octal are counted by bit length,
+    # underscores, prefixes and colons are not digits.
+    cases = [
+        ("0xff", True), ("0xfff", False), ("1_00", True), ("1_000", False), ("0b111111111", True),
+        ("0b1111111111", False), ("0777", True), ("07777", False), ("-1_00", True),
+        ("1:30", True), ("1:30:00", False), ("0x_f", True), ("0001", True),
+    ]  # fmt: skip
+    for text, fits in cases:
+        got = assert_same_answer(f"k: {text}\n", "yaml11", limits=oneyaml.Limits(int_digits=3))
+        assert (got[0] == "ok") is fits, (text, got)
+        assert fits or got[1][0] == "limit", text
+
+
+def test_explicit_int_tag_obeys_the_digit_cap(api):
+    for text, fits in [("12", True), ("1234", False), ("0x1F", True), ("0xffffff", False),
+                       ("1:30", True), ("1:30:00:00", False), ("0b101", True)]:  # fmt: skip
+        got = assert_same_answer(
+            f"k: !!int {text}\n", "yaml11", limits=oneyaml.Limits(int_digits=3)
+        )
+        assert (got[0] == "ok") is fits, (text, got)
+        assert fits or got[1][0] == "limit", text
+    assert cy.safe_load("k: !!int " + "9" * 4300 + "\n")["k"] == int("9" * 4300)
+    with pytest.raises(cy.ConstructorError) as info:
+        cy.safe_load("k: !!int " + "9" * 4301 + "\n")
+    assert info.value.category == "limit"
+
+
+def test_a_stream_is_read_once(api):
+    with pytest.raises(cy.ComposerError):
+        cy.safe_load(io.StringIO("a: 1\n---\nb: 2\n"))
+    with pytest.raises(cy.ComposerError):
+        cy.load(io.BytesIO(b"a: 1\n---\nb: 2\n"), Loader=cy.SafeLoader)
+
+    class Once(io.StringIO):
+        reads = 0
+
+        def read(self, *args):
+            Once.reads += 1
+            return super().read(*args)
+
+    loader = cy.SafeLoader(Once("a: 1\n"))
+    assert loader.check_data() and loader.get_data() == {"a": 1}
+    assert Once.reads == 1
+
+
+def test_errors_before_a_syntax_error_use_the_schema_rules(api):
+    # A repeated key is not an error here, so the syntax error is the one reported.
+    with pytest.raises(cy.YAMLError) as info:
+        cy.safe_load("a: 1\na: 2\nb: [\n")
+    assert info.value.category == "syntax"
 
 
 # ---- the comparison with PyYAML ----------------------------------------------------------------
@@ -542,21 +736,15 @@ def test_generated_scalars_match_pyyaml_widely(api):
 
 
 def test_generated_scalars_agree_between_backends():
-    import oneyaml._pure as pure
-
-    try:
-        import oneyaml._native as native
-    except ImportError:
+    if len(_backends()) < 2:
         pytest.skip("no native module")
     for text in _corpus(1500):
-        a = outcome(
-            lambda t: pure.load(t, _api._DEFAULT_LIMITS, True, "yaml11"), text, oneyaml.YAMLError
+        assert_same_answer(text, "yaml11", multi=True, parser_positions=False)
+    # The digit limit counts the same on both.
+    for text in _corpus(300):
+        assert_same_answer(
+            text, "yaml11", multi=True, limits=oneyaml.Limits(int_digits=3), parser_positions=False
         )
-        b = outcome(
-            lambda t: native.load(t, _api._DEFAULT_LIMITS, True, "yaml11"), text, oneyaml.YAMLError
-        )
-        assert a[0] == b[0], text
-        assert a[0] != "ok" or same(a[1], b[1]), text
 
 
 def _kit_cases():

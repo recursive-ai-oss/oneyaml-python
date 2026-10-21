@@ -78,9 +78,6 @@ struct Frame<'py, 's> {
     /// Expanded size of the children so far.
     nodes: usize,
     bytes: usize,
-    /// Mappings named by `<<` keys, in the order they are applied (later ones first, so that the
-    /// first one listed wins). Empty outside the YAML 1.1 mode.
-    merges: Vec<Bound<'py, PyDict>>,
 }
 
 struct Builder<'py, 's> {
@@ -90,6 +87,9 @@ struct Builder<'py, 's> {
     multi: bool,
     /// The key object that stands for a `<<` until its value arrives.
     merge_marker: Option<Bound<'py, PyAny>>,
+    /// The values of `<<` keys met in the mappings now open, by the depth of the mapping; they
+    /// are checked and applied when the mapping closes. Always empty outside the YAML 1.1 mode.
+    pending_merges: Vec<(usize, Vec<MergeValue<'py>>)>,
     stack: Vec<Frame<'py, 's>>,
     root: Option<Bound<'py, PyAny>>,
     docs: Vec<Bound<'py, PyAny>>,
@@ -114,6 +114,9 @@ struct Builder<'py, 's> {
 
 type R<T> = Result<T, Fail>;
 
+/// The value of a `<<` key, and where the key was.
+type MergeValue<'py> = (Bound<'py, PyAny>, usize);
+
 impl<'py, 's> Builder<'py, 's> {
     fn new(py: Python<'py>, lim: Lim, multi: bool, mode: Mode) -> Self {
         Builder {
@@ -121,6 +124,7 @@ impl<'py, 's> Builder<'py, 's> {
             lim,
             mode,
             merge_marker: None,
+            pending_merges: Vec::new(),
             multi,
             stack: Vec::new(),
             root: None,
@@ -218,7 +222,7 @@ impl<'py, 's> Builder<'py, 's> {
                     | Op::Float(_, at)
                     | Op::Str(_, at)
                     | Op::Num(_, _, at)
-                    | Op::Merge(at)
+                    | Op::Merge(at, _)
                     | Op::Bytes(_, at) => *at,
                     _ => 0,
                 };
@@ -238,18 +242,7 @@ impl<'py, 's> Builder<'py, 's> {
                 (self.string(text, at_key), n)
             }
             Op::Null(_) => (py.None().into_bound(py), 0),
-            Op::Merge(_) => {
-                // Only a key of a block of the document itself is a merge key; elsewhere `<<`
-                // is the text it spells.
-                if self.at_merge_key() {
-                    let marker = self
-                        .merge_marker
-                        .get_or_insert_with(|| PyList::empty(py).into_any());
-                    (marker.clone(), 0)
-                } else {
-                    (PyString::new(py, "<<").into_any(), 2)
-                }
-            }
+            Op::Merge(at, explicit) => self.merge_scalar(at, explicit)?,
             Op::Bool(b, _) => (PyBool::new(py, b).to_owned().into_any(), 0),
             Op::Int(i, _) => {
                 let Ok(v) = i.into_pyobject(py);
@@ -276,7 +269,7 @@ impl<'py, 's> Builder<'py, 's> {
         })
     }
 
-    /// Whether the next node is a key of a mapping.
+    /// Whether the next node is a key of a mapping (block, flow or inside a complex key).
     fn at_merge_key(&self) -> bool {
         match self.stack.last() {
             Some(f) => matches!(&f.body, Body::Map { key, .. } if key.is_none()),
@@ -284,14 +277,37 @@ impl<'py, 's> Builder<'py, 's> {
         }
     }
 
+    /// A plain `<<` is a merge key only as the key of a mapping; elsewhere it is the text it
+    /// spells. The tag `!!merge` has no meaning anywhere else.
+    #[inline(never)]
+    fn merge_scalar(&mut self, at: usize, explicit: bool) -> R<(Bound<'py, PyAny>, usize)> {
+        let py = self.py;
+        if self.at_merge_key() {
+            let marker = self
+                .merge_marker
+                .get_or_insert_with(|| PyList::empty(py).into_any());
+            Ok((marker.clone(), 0))
+        } else if explicit {
+            Err(Fail::new(
+                "construct",
+                "the merge tag is only meaningful on a mapping key",
+                at,
+            ))
+        } else {
+            Ok((PyString::new(py, "<<").into_any(), 2))
+        }
+    }
+
     /// Apply a tag: the Core schema keeps what it does not know as `Tagged`; the YAML 1.1 mode
     /// lets a Python function build the value.
+    #[inline(never)]
     fn tagged(&self, tag: &str, obj: Bound<'py, PyAny>, at: usize) -> R<Bound<'py, PyAny>> {
         let py = self.py;
         if self.mode == Mode::Core {
             return Ok(classes::tagged(py)?.call1((tag, obj))?);
         }
-        match classes::construct(py)?.call1((tag, obj)) {
+        let cap = (self.lim.digits != usize::MAX).then_some(self.lim.digits);
+        match classes::construct(py)?.call1((tag, obj, cap)) {
             Ok(v) => Ok(v),
             Err(e) if e.is_instance(py, classes::reject(py)?) => {
                 let v = e.value(py);
@@ -389,13 +405,13 @@ impl<'py, 's> Builder<'py, 's> {
             slot,
             nodes: 0,
             bytes: 0,
-            merges: Vec::new(),
         });
         Ok(())
     }
 
     fn close(&mut self) -> R<()> {
         let py = self.py;
+        let depth = self.stack.len();
         let Some(f) = self.stack.pop() else {
             return Err(Fail::new("other", "unbalanced collection", self.doc_start));
         };
@@ -403,17 +419,22 @@ impl<'py, 's> Builder<'py, 's> {
             Body::Seq(l) => l.into_any(),
             Body::KeySeq(v) => PyTuple::new(py, v)?.into_any(),
             Body::Map { dict, .. } => {
-                let dict = if f.merges.is_empty() {
-                    dict
-                } else {
+                let dict = if matches!(self.pending_merges.last(), Some((d, _)) if *d == depth) {
+                    let sources = self
+                        .pending_merges
+                        .pop()
+                        .map(|(_, v)| v)
+                        .unwrap_or_default();
                     // Merged entries first, then the mapping's own: its keys keep the merged
                     // keys' places and replace their values.
                     let merged = PyDict::new(py);
-                    for m in &f.merges {
+                    for m in merge_sources(&sources)? {
                         merged.update(m.as_mapping())?;
                     }
                     merged.update(dict.as_mapping())?;
                     merged
+                } else {
+                    dict
                 };
                 if f.key_mode {
                     classes::frozen_mapping(py)?.call1((dict,))?
@@ -470,6 +491,15 @@ impl<'py, 's> Builder<'py, 's> {
         let (height, nodes, bytes) = (a.height, a.nodes, a.bytes);
         let mut obj = a.obj.clone();
         let hashable = a.hashable;
+        if let Some(m) = &self.merge_marker
+            && obj.is(m)
+        {
+            return Err(Fail::new(
+                "construct",
+                "an alias to a merge key cannot be constructed",
+                at,
+            ));
+        }
         // Charge what a copy would hold. Sharing makes loading cheap, but whoever walks the
         // result (a dump, a comparison, `json.dumps`) pays for the expansion.
         self.charged_nodes = self.charged_nodes.saturating_add(nodes);
@@ -530,10 +560,17 @@ impl<'py, 's> Builder<'py, 's> {
         nodes: usize,
         bytes: usize,
     ) -> R<()> {
-        let compat = self.mode != Mode::Core;
-        let marker = self.merge_marker.clone();
-        let Some(f) = self.stack.last_mut() else {
-            self.root = Some(obj);
+        let Builder {
+            stack,
+            merge_marker,
+            pending_merges,
+            mode,
+            root,
+            py,
+            ..
+        } = self;
+        let Some(f) = stack.last_mut() else {
+            *root = Some(obj);
             return Ok(());
         };
         f.tallest = f.tallest.max(height);
@@ -545,16 +582,23 @@ impl<'py, 's> Builder<'py, 's> {
             Body::Map { dict, key } => match key.take() {
                 None => *key = Some((obj, at)),
                 Some((k, kat)) => {
-                    if let Some(m) = &marker
+                    if let Some(m) = merge_marker
                         && k.is(m)
                     {
-                        return add_merge(&mut f.merges, &obj, kat);
+                        // Checked when the mapping closes, so that an error met later in the
+                        // mapping is the one reported, as the pure backend does.
+                        let depth = stack.len();
+                        match pending_merges.last_mut() {
+                            Some((d, v)) if *d == depth => v.push((obj, kat)),
+                            _ => pending_merges.push((depth, vec![(obj, kat)])),
+                        }
+                        return Ok(());
                     }
                     let before = dict.len();
                     if let Err(e) = dict.set_item(&k, &obj) {
                         // Comparing two equal deep keys can run out of interpreter stack; that
                         // is a limit of this load, not a failure of the caller's code.
-                        if e.is_instance_of::<PyRecursionError>(self.py) {
+                        if e.is_instance_of::<PyRecursionError>(*py) {
                             return Err(Fail::new(
                                 "limit",
                                 "a mapping key is nested too deeply to compare",
@@ -564,7 +608,7 @@ impl<'py, 's> Builder<'py, 's> {
                         return Err(e.into());
                     }
                     // A repeated key is an error in YAML 1.2; the compat modes keep the last.
-                    if dict.len() == before && !compat {
+                    if dict.len() == before && *mode == Mode::Core {
                         return Err(collision(dict, &k, kat));
                     }
                 }
@@ -586,19 +630,9 @@ impl<'py, 's> Builder<'py, 's> {
     }
 }
 
-/// Take the mapping (or list of mappings) a `<<` key names.
-fn add_merge<'py>(
-    merges: &mut Vec<Bound<'py, PyDict>>,
-    value: &Bound<'py, PyAny>,
-    at: usize,
-) -> R<()> {
-    let bad = || {
-        Fail::new(
-            "construct",
-            "expected a mapping or list of mappings for merging",
-            at,
-        )
-    };
+/// The mappings the values of a mapping's `<<` keys name, in the order they are applied: for a
+/// list the last mapping first, so that the first one listed wins.
+fn merge_sources<'py>(values: &[(Bound<'py, PyAny>, usize)]) -> R<Vec<Bound<'py, PyDict>>> {
     let as_dict = |o: &Bound<'py, PyAny>| -> Option<Bound<'py, PyDict>> {
         if let Ok(d) = o.cast::<PyDict>() {
             return Some(d.clone());
@@ -606,24 +640,30 @@ fn add_merge<'py>(
         // A mapping inside a key is a FrozenMapping, which wraps a dict.
         o.getattr("_items").ok()?.cast_into::<PyDict>().ok()
     };
-    if let Ok(list) = value.cast::<PyList>() {
-        let mut found = Vec::with_capacity(list.len());
-        for item in list.iter() {
-            found.push(as_dict(&item).ok_or_else(bad)?);
+    let mut out = Vec::new();
+    for (value, at) in values {
+        let bad = || {
+            Fail::new(
+                "construct",
+                "expected a mapping or list of mappings for merging",
+                *at,
+            )
+        };
+        let items: Vec<Bound<'py, PyAny>> = if let Ok(list) = value.cast::<PyList>() {
+            list.iter().collect()
+        } else if let Ok(t) = value.cast::<PyTuple>() {
+            t.iter().collect()
+        } else {
+            out.push(as_dict(value).ok_or_else(bad)?);
+            continue;
+        };
+        let mut found = Vec::with_capacity(items.len());
+        for item in &items {
+            found.push(as_dict(item).ok_or_else(bad)?);
         }
-        merges.extend(found.into_iter().rev());
-        return Ok(());
+        out.extend(found.into_iter().rev());
     }
-    if let Ok(t) = value.cast::<PyTuple>() {
-        let mut found = Vec::with_capacity(t.len());
-        for item in t.iter() {
-            found.push(as_dict(&item).ok_or_else(bad)?);
-        }
-        merges.extend(found.into_iter().rev());
-        return Ok(());
-    }
-    merges.push(as_dict(value).ok_or_else(bad)?);
-    Ok(())
+    Ok(out)
 }
 
 fn key_too_deep(at: usize) -> Fail {

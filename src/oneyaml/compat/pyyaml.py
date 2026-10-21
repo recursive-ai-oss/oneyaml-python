@@ -184,7 +184,9 @@ def _convert(exc: _BaseError, name: str) -> YAMLError:
         mark = None
         if exc.line is not None and exc.column is not None:
             mark = Mark(name, exc.offset or 0, exc.line - 1, exc.column - 1)
-        if category == "other" and "more than one document" in message:
+        if getattr(exc, "construct", False):
+            out = ConstructorError(None, None, message, mark)
+        elif category == "other" and "more than one document" in message:
             out = ComposerError(
                 "expected a single document in the stream", mark, "but found another document", mark
             )
@@ -232,16 +234,23 @@ class BaseLoader:
 
     def __init__(self, stream: Any) -> None:
         self.stream = stream
+        self._input: tuple[str | bytes, str] | None = None
         self._docs: list[Any] | None = None
         self._next = 0
 
+    def _load(self, multi: bool) -> Any:
+        # The stream is read once, whatever is asked of it afterwards.
+        if self._input is None:
+            self._input = _read(self.stream)
+        data, name = self._input
+        try:
+            return _api._impl.load(data, _api._DEFAULT_LIMITS, multi, self._schema)
+        except _BaseError as exc:
+            raise _convert(exc, name) from None
+
     def _documents(self) -> list[Any]:
         if self._docs is None:
-            data, name = _read(self.stream)
-            try:
-                self._docs = _api._impl.load(data, _api._DEFAULT_LIMITS, True, self._schema)
-            except _BaseError as exc:
-                raise _convert(exc, name) from None
+            self._docs = self._load(True)
         return self._docs
 
     def check_data(self) -> bool:
@@ -255,21 +264,12 @@ class BaseLoader:
         return docs[self._next - 1]
 
     def get_single_data(self) -> Any:
-        docs = self._documents()
-        if not docs:
-            return None
-        if len(docs) > 1:
-            # Same error a single-document read gives, with the place of the second document.
-            data, name = _read(self.stream)
-            try:
-                _api._impl.load(data, _api._DEFAULT_LIMITS, False, self._schema)
-            except _BaseError as exc:
-                raise _convert(exc, name) from None
-        self._next = 1
-        return docs[0]
+        # A stream of several documents is refused by the load itself, at the second one.
+        return self._load(False)
 
     def dispose(self) -> None:
         self._docs = None
+        self._input = None
 
 
 class SafeLoader(BaseLoader):

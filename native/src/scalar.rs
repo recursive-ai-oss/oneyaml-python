@@ -200,11 +200,15 @@ pub fn base64(text: &str) -> Option<Vec<u8>> {
 pub enum Plain11 {
     Null,
     Bool(bool),
-    Int(i64),
+    /// The value, and the decimal digits it is counted as against the digit limit.
+    Int(i64, usize),
     /// An integer that does not fit `i64`: sign and digits (underscores removed) in the given
-    /// base; base 60 keeps its colons.
-    Big(String, u32),
+    /// base (base 60 keeps its colons), and the decimal digits it is counted as.
+    Big(String, u32, usize),
     Float(f64),
+    /// A base-60 float with more parts than the exact arithmetic here covers; the text goes to
+    /// the Python side.
+    LongFloat,
     Merge,
     Timestamp,
     Str,
@@ -245,6 +249,26 @@ pub fn classify11(s: &str) -> Plain11 {
     }
 }
 
+/// The decimal digits an integer written with `n` digits (no leading zeros) in `base` is counted
+/// as against the digit limit: exact for base 10, an upper bound from the bit length for the
+/// others. The Python side uses the same figures.
+pub fn est_digits(base: u32, n: usize) -> usize {
+    let bits = match base {
+        2 => n,
+        8 => n.saturating_mul(3),
+        16 => n.saturating_mul(4),
+        _ => return n.max(1),
+    };
+    bits.saturating_mul(30103) / 100_000 + 1
+}
+
+/// The same for base 60: `first` digits in the first part, `parts` parts.
+pub fn est_digits60(first: usize, parts: usize) -> usize {
+    first
+        .saturating_add((parts - 1).saturating_mul(17782) / 10_000)
+        .saturating_add(1)
+}
+
 fn signed(neg: bool, v: i64) -> i64 {
     if neg { -v } else { v }
 }
@@ -255,9 +279,10 @@ fn sign_text(neg: bool) -> &'static str {
 
 /// `digits` (no sign) in `base` as an integer, or as text when it does not fit.
 fn radix11(neg: bool, digits: &str, base: u32) -> Plain11 {
+    let est = est_digits(base, digits.trim_start_matches('0').len());
     match i64::from_str_radix(digits, base) {
-        Ok(v) => Plain11::Int(signed(neg, v)),
-        Err(_) => Plain11::Big(format!("{}{digits}", sign_text(neg)), base),
+        Ok(v) => Plain11::Int(signed(neg, v), est),
+        Err(_) => Plain11::Big(format!("{}{digits}", sign_text(neg)), base, est),
     }
 }
 
@@ -370,9 +395,10 @@ fn number11(s: &str) -> Plain11 {
         }
         let d = strip_us(rest);
         return if d.len() <= 18 {
-            Plain11::Int(signed(neg, d.parse().unwrap_or(0)))
+            Plain11::Int(signed(neg, d.parse().unwrap_or(0)), d.len())
         } else {
-            Plain11::Big(format!("{}{d}", sign_text(neg)), 10)
+            let est = d.len();
+            Plain11::Big(format!("{}{d}", sign_text(neg)), 10, est)
         };
     }
     match b[i] {
@@ -424,20 +450,21 @@ fn sexagesimal(neg: bool, rest: &str, first: u8) -> Plain11 {
                 }
             }
         }
+        let stripped: Vec<String> = parts.iter().map(|p| strip_us(p)).collect();
+        let est = est_digits60(stripped[0].len(), stripped.len());
         if fits && let Ok(v) = i64::try_from(total) {
-            return Plain11::Int(signed(neg, v));
+            return Plain11::Int(signed(neg, v), est);
         }
-        let text = parts
-            .iter()
-            .map(|p| strip_us(p))
-            .collect::<Vec<_>>()
-            .join(":");
-        return Plain11::Big(format!("{}{text}", sign_text(neg)), 60);
+        return Plain11::Big(format!("{}{}", sign_text(neg), stripped.join(":")), 60, est);
     }
     if b[i] != b'.' || !b[i + 1..].iter().all(|&c| dig_us(c)) {
         return Plain11::Str;
     }
-    // The same order of operations as PyYAML, so the sums round the same way.
+    // The same arithmetic as PyYAML's formula, with the weights taken exactly (they are integers
+    // there). Up to 22 parts the weights fit 128 bits; longer ones are left to the Python side.
+    if parts.len() > 22 {
+        return Plain11::LongFloat;
+    }
     let mut values: Vec<f64> = Vec::new();
     for (n, p) in parts.iter().enumerate() {
         let t = if n + 1 == parts.len() {
@@ -450,10 +477,12 @@ fn sexagesimal(neg: bool, rest: &str, first: u8) -> Plain11 {
             Err(_) => return Plain11::Str,
         }
     }
-    let (mut value, mut base) = (0.0_f64, 1.0_f64);
-    for d in values.iter().rev() {
-        value += d * base;
-        base *= 60.0;
+    let (mut value, mut weight) = (0.0_f64, 1_u128);
+    for (n, d) in values.iter().rev().enumerate() {
+        value += d * (weight as f64);
+        if n + 1 < values.len() {
+            weight *= 60;
+        }
     }
     Plain11::Float(if neg { -value } else { value })
 }

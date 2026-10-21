@@ -75,7 +75,7 @@ pub enum Op<'s> {
     Num(Cow<'s, str>, u32, usize),
     Bytes(Vec<u8>, usize),
     /// The plain scalar `<<` in a mapping-key position.
-    Merge(usize),
+    Merge(usize, bool),
     Prop(Box<Prop<'s>>, usize),
     Open {
         map: bool,
@@ -170,7 +170,15 @@ fn plain11<'s>(text: Cow<'s, str>, cap: usize, at: usize) -> Op<'s> {
         Plain11::Null => Op::Null(at),
         Plain11::Bool(b) => Op::Bool(b, at),
         Plain11::Float(f) => Op::Float(f, at),
-        Plain11::Merge => Op::Merge(at),
+        Plain11::Merge => Op::Merge(at, false),
+        Plain11::LongFloat => Op::Prop(
+            Box::new(Prop {
+                inner: Op::Str(text, at),
+                anchor: None,
+                custom: Some(Cow::Borrowed("tag:yaml.org,2002:float")),
+            }),
+            at,
+        ),
         Plain11::Timestamp => Op::Prop(
             Box::new(Prop {
                 inner: Op::Str(text, at),
@@ -179,15 +187,15 @@ fn plain11<'s>(text: Cow<'s, str>, cap: usize, at: usize) -> Op<'s> {
             }),
             at,
         ),
-        Plain11::Int(i) => {
-            if cap < 18 && digit_count(&text) > cap {
-                return digit_fail(digit_count(&text), cap, at);
+        Plain11::Int(i, est) => {
+            if est > cap {
+                return digit_fail(est, cap, at);
             }
             Op::Int(i, at)
         }
-        Plain11::Big(t, base) => {
-            if base == 10 && digit_count(&t) > cap {
-                return digit_fail(digit_count(&t), cap, at);
+        Plain11::Big(t, base, est) => {
+            if est > cap {
+                return digit_fail(est, cap, at);
             }
             Op::Num(Cow::Owned(t), base, at)
         }
@@ -230,9 +238,8 @@ fn core_scalar<'s>(tag: CoreTag, text: Cow<'s, str>, cap: usize, at: usize) -> O
 }
 
 /// The anchor and tag written on a node.
-fn props<'s>(
+fn props<'s, const CORE: bool>(
     ev: &Sourced<'s, Event<'s>>,
-    mode: Mode,
 ) -> Result<(Option<&'s str>, Tag<'s>), Box<Failure>> {
     let Some(p) = ev.properties() else {
         return Ok((None, Tag::None));
@@ -257,7 +264,7 @@ fn props<'s>(
             Some(t) if t.form == TagForm::NonSpecific => Tag::NonSpecific,
             // Under YAML 1.1 every tag goes to the callback, which knows the whole set.
             Some(t) => match core_tag(&t.resolved) {
-                Some(c) if mode == Mode::Core => Tag::Core(c),
+                Some(c) if CORE => Tag::Core(c),
                 _ => Tag::Custom(t.resolved),
             },
         }
@@ -267,12 +274,16 @@ fn props<'s>(
     Ok((anchor, tag))
 }
 
-fn scalar_op<'s>(ev: &Sourced<'s, Event<'s>>, style: ScalarStyle, conv: Conv) -> Op<'s> {
+fn scalar_op<'s, const CORE: bool>(
+    ev: &Sourced<'s, Event<'s>>,
+    style: ScalarStyle,
+    conv: Conv,
+) -> Op<'s> {
     let at = ev.span().start;
     let Some(text) = ev.value() else {
         return fail("other", "scalar text unavailable", at);
     };
-    let (anchor, tag) = match props(ev, conv.mode) {
+    let (anchor, tag) = match props::<CORE>(ev) {
         Ok(p) => p,
         Err(f) => return Op::Fail(f),
     };
@@ -291,25 +302,11 @@ fn scalar_op<'s>(ev: &Sourced<'s, Event<'s>>, style: ScalarStyle, conv: Conv) ->
             )
         }
     };
-    if conv.mode == Mode::Text {
-        return wrap(Op::Str(text, at), None);
+    if !CORE {
+        return other_scalar(conv, tag, style, text, anchor, at);
     }
     match tag {
-        Tag::None if style == ScalarStyle::Plain => {
-            let op = if conv.mode == Mode::Yaml11 {
-                plain11(text, cap, at)
-            } else {
-                plain(text, cap, at)
-            };
-            // An implicit timestamp is already a `Prop`; an anchor goes around it.
-            match op {
-                Op::Prop(mut p, pat) if anchor.is_some() => {
-                    p.anchor = anchor;
-                    Op::Prop(p, pat)
-                }
-                op => wrap(op, None),
-            }
-        }
+        Tag::None if style == ScalarStyle::Plain => wrap(plain(text, cap, at), None),
         Tag::None | Tag::NonSpecific => wrap(Op::Str(text, at), None),
         Tag::Core(c) => {
             let op = core_scalar(c, text, cap, at);
@@ -323,14 +320,54 @@ fn scalar_op<'s>(ev: &Sourced<'s, Event<'s>>, style: ScalarStyle, conv: Conv) ->
     }
 }
 
-fn open_op<'s>(ev: &Sourced<'s, Event<'s>>, map: bool, mode: Mode) -> Op<'s> {
+/// A scalar under the YAML 1.1 rules or as plain text.
+fn other_scalar<'s>(
+    conv: Conv,
+    tag: Tag<'s>,
+    style: ScalarStyle,
+    text: Cow<'s, str>,
+    anchor: Option<&'s str>,
+    at: usize,
+) -> Op<'s> {
+    let (inner, custom) = if conv.mode == Mode::Text {
+        (Op::Str(text, at), None)
+    } else {
+        match tag {
+            Tag::None if style == ScalarStyle::Plain => (plain11(text, conv.cap, at), None),
+            Tag::None | Tag::NonSpecific => (Op::Str(text, at), None),
+            // `!!merge` makes any scalar a merge key.
+            Tag::Custom(t) if t == "tag:yaml.org,2002:merge" => (Op::Merge(at, true), None),
+            Tag::Custom(t) => (Op::Str(text, at), Some(t)),
+            Tag::Core(_) => (Op::Str(text, at), None),
+        }
+    };
+    match inner {
+        Op::Fail(_) => inner,
+        // An implicit timestamp is already a `Prop`; an anchor goes around it.
+        Op::Prop(mut p, pat) => {
+            p.anchor = anchor;
+            Op::Prop(p, pat)
+        }
+        inner if anchor.is_none() && custom.is_none() => inner,
+        inner => Op::Prop(
+            Box::new(Prop {
+                inner,
+                anchor,
+                custom,
+            }),
+            at,
+        ),
+    }
+}
+
+fn open_op<'s, const CORE: bool>(ev: &Sourced<'s, Event<'s>>, map: bool, mode: Mode) -> Op<'s> {
     let at = ev.span().start;
-    let (anchor, tag) = match props(ev, mode) {
+    let (anchor, tag) = match props::<CORE>(ev) {
         Ok(p) => p,
         Err(f) => return Op::Fail(f),
     };
     let custom = match tag {
-        _ if mode == Mode::Text => None,
+        _ if !CORE && mode == Mode::Text => None,
         Tag::None | Tag::NonSpecific => None,
         Tag::Core(CoreTag::Seq) if !map => None,
         Tag::Core(CoreTag::Map) if map => None,
@@ -355,9 +392,27 @@ fn open_op<'s>(ev: &Sourced<'s, Event<'s>>, map: bool, mode: Mode) -> Op<'s> {
 /// directives, the stream's ends).
 pub fn translate<'s>(ev: &Sourced<'s, Event<'s>>, conv: Conv) -> Option<Op<'s>> {
     Some(match ev.kind() {
-        EventKind::Scalar { style, .. } => scalar_op(ev, *style, conv),
-        EventKind::SequenceStart { .. } => open_op(ev, false, conv.mode),
-        EventKind::MappingStart { .. } => open_op(ev, true, conv.mode),
+        EventKind::Scalar { style, .. } => {
+            if conv.mode == Mode::Core {
+                scalar_op::<true>(ev, *style, conv)
+            } else {
+                scalar_op::<false>(ev, *style, conv)
+            }
+        }
+        EventKind::SequenceStart { .. } => {
+            if conv.mode == Mode::Core {
+                open_op::<true>(ev, false, conv.mode)
+            } else {
+                open_op::<false>(ev, false, conv.mode)
+            }
+        }
+        EventKind::MappingStart { .. } => {
+            if conv.mode == Mode::Core {
+                open_op::<true>(ev, true, conv.mode)
+            } else {
+                open_op::<false>(ev, true, conv.mode)
+            }
+        }
         EventKind::SequenceEnd | EventKind::MappingEnd => Op::Close,
         EventKind::Alias => match ev.alias_name() {
             Some(name) => Op::Alias(name, ev.span().start),

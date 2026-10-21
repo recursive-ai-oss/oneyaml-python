@@ -11,7 +11,15 @@ import re
 from typing import Any
 
 from .._types import big_int
-from .._yaml11 import Reject, construct, sexagesimal_int, timestamp
+from .._yaml11 import (
+    Reject,
+    construct,
+    est_digits,
+    est_digits60,
+    sexagesimal_float,
+    sexagesimal_int,
+    timestamp,
+)
 from ._resolve import _PY_DIGITS, INF, NAN, NINF, Fail, _too_long
 
 
@@ -21,6 +29,8 @@ class _Merge:
     def __repr__(self) -> str:
         return "<merge key>"
 
+
+_MERGE_TAG = "tag:yaml.org,2002:merge"
 
 # What a plain ``<<`` resolves to; the mapping that holds it takes the entries it names.
 MERGE = _Merge()
@@ -90,16 +100,13 @@ def number11(v: str, cap: int | None, wide: dict[int, float]) -> Any:
     if g == 6:
         return float(s)
     if g == 7:
-        value = 0.0
-        base = 1
-        for part in reversed([float(p) for p in body.split(":")]):
-            value += part * base
-            base *= 60
+        value = sexagesimal_float([float(p) for p in body.split(":")])
         return -value if neg else value
     if g == 5:
-        first = body.split(":", 1)[0]
-        if cap is not None and len(first) > cap:
-            raise _too_long(len(first), cap)
+        parts = body.split(":")
+        est = est_digits60(len(parts[0]), len(parts))
+        if cap is not None and est > cap:
+            raise _too_long(est, cap)
         return sexagesimal_int(s)
     # Binary, octal and hexadecimal.
     if g == 3:
@@ -108,14 +115,19 @@ def number11(v: str, cap: int | None, wide: dict[int, float]) -> Any:
         digits, base = body[2:], 2 if g == 2 else 16
     if not digits:  # ``0b_``: no digits at all
         return v
+    est = est_digits(base, len(digits.lstrip("0")))
+    if cap is not None and est > cap:
+        raise _too_long(est, cap)
     n = int(digits, base)
     return -n if neg else n
 
 
 def tagged_scalar11(tag: str, v: str, cap: int | None, wide: dict[int, float]) -> Any:
     """A scalar with an explicit tag."""
+    if tag == _MERGE_TAG:
+        return MERGE
     try:
-        return construct(tag, v)
+        return construct(tag, v, cap)
     except Reject as exc:
         raise Fail(exc.message, exc.category) from None
 

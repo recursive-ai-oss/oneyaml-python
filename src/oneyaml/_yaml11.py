@@ -16,7 +16,15 @@ from typing import Any
 
 from ._types import FrozenMapping, big_int
 
-__all__ = ["Reject", "construct", "sexagesimal_int", "timestamp"]
+__all__ = [
+    "Reject",
+    "construct",
+    "est_digits",
+    "est_digits60",
+    "sexagesimal_float",
+    "sexagesimal_int",
+    "timestamp",
+]
 
 _YAML = "tag:yaml.org,2002:"
 
@@ -63,6 +71,21 @@ def timestamp(v: str) -> datetime.date | datetime.datetime:
         raise Reject(f"{v!r} is not a valid timestamp: {exc}") from None
 
 
+def est_digits(base: int, n: int) -> int:
+    """The decimal digits an integer of ``n`` digits (no leading zeros) in ``base`` counts as
+    against the digit limit: exact for base 10, an upper bound from the bit length otherwise.
+    The native backend uses the same figures."""
+    if base == 10:
+        return max(n, 1)
+    bits = n * {2: 1, 8: 3, 16: 4}[base]
+    return bits * 30103 // 100_000 + 1
+
+
+def est_digits60(first: int, parts: int) -> int:
+    """The same for a base-60 integer: ``first`` digits in the first of ``parts`` parts."""
+    return first + (parts - 1) * 17782 // 10_000 + 1
+
+
 def _int(text: str) -> int:
     try:
         return int(text)
@@ -83,8 +106,14 @@ def sexagesimal_int(text: str) -> int:
     return -value if neg else value
 
 
-def _int_value(text: str) -> int:
-    """PyYAML's reading of ``!!int`` text, which is more lenient than its implicit rule."""
+def _check_digits(est: int, cap: int | None) -> None:
+    if cap is not None and est > cap:
+        raise Reject(f"an integer of {est} digits is over the limit of {cap} digits", "limit")
+
+
+def _int_value(text: str, cap: int | None = None) -> int:
+    """PyYAML's reading of ``!!int`` text, which is more lenient than its implicit rule.
+    ``cap`` is the most decimal digits the integer may have (None for any)."""
     v = text.replace("_", "")
     if not v:
         raise Reject("an empty !!int")
@@ -94,14 +123,18 @@ def _int_value(text: str) -> int:
     try:
         if v == "0":
             return 0
-        if v.startswith("0b"):
-            return sign * int(v[2:], 2)
-        if v.startswith("0x"):
-            return sign * int(v[2:], 16)
+        if v.startswith(("0b", "0x")):
+            base = 2 if v[1] == "b" else 16
+            _check_digits(est_digits(base, len(v[2:].lstrip("0"))), cap)
+            return sign * int(v[2:], base)
         if v.startswith("0"):
+            _check_digits(est_digits(8, len(v.lstrip("0"))), cap)
             return sign * int(v, 8)
         if ":" in v:
+            parts = v.split(":")
+            _check_digits(est_digits60(len(parts[0]), len(parts)), cap)
             return sign * sexagesimal_int(v)
+        _check_digits(len(v), cap)
         return sign * int(v)
     except ValueError as exc:
         if "digits" in str(exc) and "limit" in str(exc):
@@ -110,6 +143,25 @@ def _int_value(text: str) -> int:
 
 
 _NAN = float("nan")
+
+
+def sexagesimal_float(parts: list[float]) -> float:
+    """PyYAML's base-60 float formula, ``sum(part * 60**k)`` from the right, without ever
+    overflowing: a value past the range of a double is infinity. No part is below zero, so no
+    step can make a NaN."""
+    value = 0.0
+    weight = 1
+    for k, part in enumerate(reversed(parts)):
+        if part:
+            if k > 175:  # 60**175 is past the range of a double; one nonzero part is enough
+                return float("inf")
+            try:
+                value += part * weight
+            except OverflowError:
+                return float("inf")
+        if k <= 175:
+            weight *= 60
+    return value
 
 
 def _float_value(text: str) -> float:
@@ -125,12 +177,7 @@ def _float_value(text: str) -> float:
         if v == ".nan":
             return _NAN
         if ":" in v:
-            value = 0.0
-            base = 1
-            for part in reversed([float(p) for p in v.split(":")]):
-                value += part * base
-                base *= 60
-            return sign * value
+            return sign * sexagesimal_float([float(p) for p in v.split(":")])
         return sign * float(v)
     except ValueError:
         raise Reject(f"{text!r} is not a valid !!float") from None
@@ -167,11 +214,12 @@ def _pairs(tag: str, value: Any, what: str) -> Any:
     return tuple(out) if type(value) is tuple else out
 
 
-def construct(tag: str, value: Any) -> Any:
+def construct(tag: str, value: Any, cap: int | None = None) -> Any:
     """The value a tag stands for.
 
     ``value`` is the scalar text or the collection built from the node. Anything but the
-    standard tags is refused: nothing is ever built from a tag by running code."""
+    standard tags is refused: nothing is ever built from a tag by running code. ``cap`` is the
+    most decimal digits an integer may have (None for any)."""
     if tag.startswith(_YAML):
         kind = tag[len(_YAML) :]
         if kind == "str":
@@ -188,7 +236,7 @@ def construct(tag: str, value: Any) -> Any:
                 raise Reject(f"{value!r} is not a valid !!bool") from None
         if kind == "int":
             _want(tag, value, "scalar")
-            return _int_value(value)
+            return _int_value(value, cap)
         if kind == "float":
             _want(tag, value, "scalar")
             return _float_value(value)
