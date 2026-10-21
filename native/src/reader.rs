@@ -28,9 +28,9 @@ const KEY_CACHE_MAX_LEN: usize = 128;
 const KEY_CACHE_MAX_ENTRIES: usize = 1 << 16;
 /// From this many bytes of input the engine runs on a second thread while objects are built.
 /// Below it, starting a thread costs more than it saves.
-const PIPELINE_MIN: usize = 128 * 1024;
+pub(crate) const PIPELINE_MIN: usize = 128 * 1024;
 /// Batches the engine may run ahead of the builder.
-const PIPELINE_DEPTH: usize = 4;
+pub(crate) const PIPELINE_DEPTH: usize = 4;
 /// Events between looks for a pending signal on the single-thread path.
 const SIGNAL_EVERY: usize = 4096;
 /// How deep collections may nest inside one mapping key. A key is hashed by the interpreter,
@@ -80,6 +80,15 @@ struct Frame<'py, 's> {
     bytes: usize,
 }
 
+/// A node a registered constructor builds. Its events wait in a list, which stands in the
+/// result until the whole input has been read, so that no callback runs on a document that
+/// turns out to be malformed.
+enum Hole<'py> {
+    Root(Bound<'py, PyList>),
+    Item(Bound<'py, PyList>, usize, Bound<'py, PyList>),
+    Entry(Bound<'py, PyDict>, Bound<'py, PyAny>, Bound<'py, PyList>),
+}
+
 pub struct Builder<'py, 's> {
     py: Python<'py>,
     lim: Lim,
@@ -123,6 +132,7 @@ pub struct Builder<'py, 's> {
     /// began.
     key_depth: usize,
     key_start: usize,
+    holes: Vec<Hole<'py>>,
 }
 
 pub type R<T> = Result<T, Fail>;
@@ -231,7 +241,89 @@ impl<'py, 's> Builder<'py, 's> {
             documents: 0,
             key_depth: 0,
             key_start: 0,
+            holes: Vec::new(),
         }
+    }
+
+    /// A builder for the YAML 1.1 rules that leaves nodes to registered constructors (see
+    /// `defer`).
+    pub fn hooked(py: Python<'py>, lim: Lim, multi: bool) -> Self {
+        Self::new(py, lim, multi, Mode::Yaml11)
+    }
+
+    /// Whether any node has been left to a constructor so far.
+    pub fn has_holes(&self) -> bool {
+        !self.holes.is_empty()
+    }
+
+    /// Leave the node whose events are in `events` to a constructor and put the list in its
+    /// place. False when the node is where that cannot work (in a mapping key, or in the
+    /// value of a merge key): the caller falls back to building every node.
+    pub fn defer(&mut self, events: Bound<'py, PyList>, at: usize, nodes: usize) -> R<bool> {
+        let hole = match self.stack.last() {
+            None => Hole::Root(events.clone()),
+            Some(f) => {
+                if f.key_mode {
+                    return Ok(false);
+                }
+                if let Some(marker) = &self.merge_marker {
+                    // Inside the value of a `<<` key some enclosing mapping waits on it.
+                    if self.stack.len() > 64 {
+                        return Ok(false);
+                    }
+                    for frame in &self.stack {
+                        if let Body::Map {
+                            key: Some((k, _)), ..
+                        } = &frame.body
+                            && k.is(marker)
+                        {
+                            return Ok(false);
+                        }
+                    }
+                }
+                match &f.body {
+                    Body::KeySeq(_) | Body::Map { key: None, .. } => return Ok(false),
+                    Body::Seq(l) => Hole::Item(l.clone(), l.len(), events.clone()),
+                    Body::Map {
+                        dict,
+                        key: Some((k, _)),
+                    } => Hole::Entry(dict.clone(), k.clone(), events.clone()),
+                }
+            }
+        };
+        self.holes.push(hole);
+        self.nodes += 1;
+        self.place(events.into_any(), 1, at, nodes, 0)?;
+        Ok(true)
+    }
+
+    /// Build the values left to constructors, in document order, with `build(events)`.
+    pub fn resolve_holes(&mut self, build: &Bound<'py, PyAny>) -> R<()> {
+        for hole in std::mem::take(&mut self.holes) {
+            let events = match &hole {
+                Hole::Root(e) | Hole::Item(_, _, e) | Hole::Entry(_, _, e) => e.clone(),
+            };
+            let value = build.call1((events.clone(),))?;
+            // A later duplicate key may have replaced the placeholder; its value stands.
+            match hole {
+                Hole::Root(_) => {
+                    if let Some(d) = self.docs.iter_mut().find(|d| d.is(&events)) {
+                        *d = value;
+                    }
+                }
+                Hole::Item(l, i, _) => {
+                    if l.get_item(i)?.is(&events) {
+                        l.set_item(i, value)?;
+                    }
+                }
+                Hole::Entry(d, k, _) => {
+                    if d.get_item(&k)?.is_some_and(|v| v.is(&events)) {
+                        d.set_item(&k, value)?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Whether the next node is a mapping key, or is inside one.
@@ -716,7 +808,7 @@ impl<'py, 's> Builder<'py, 's> {
         Ok(())
     }
 
-    fn finish(self) -> PyResult<Bound<'py, PyAny>> {
+    pub fn finish(self) -> PyResult<Bound<'py, PyAny>> {
         let py = self.py;
         if self.multi {
             Ok(PyList::new(py, self.docs)?.into_any())
@@ -793,7 +885,7 @@ fn collision(dict: &Bound<'_, PyDict>, k: &Bound<'_, PyAny>, at: usize) -> Fail 
 }
 
 /// The failure for a panic in one of the stages: a bug in this library, never the input's fault.
-fn internal_error(payload: &(dyn std::any::Any + Send)) -> Fail {
+pub(crate) fn internal_error(payload: &(dyn std::any::Any + Send)) -> Fail {
     Fail::Yaml {
         category: "other",
         message: format!(
@@ -805,7 +897,7 @@ fn internal_error(payload: &(dyn std::any::Any + Send)) -> Fail {
 }
 
 /// Let a pending signal (Ctrl-C) end the load: it surfaces as the usual `KeyboardInterrupt`.
-fn poll_signals(py: Python<'_>) -> R<()> {
+pub fn poll_signals(py: Python<'_>) -> R<()> {
     if hook::take(hook::INTERRUPT) {
         // The test switch stands in for a Ctrl-C: `interrupt_main` raises SIGINT in this
         // process as the interpreter's own signal handling would.
@@ -817,7 +909,7 @@ fn poll_signals(py: Python<'_>) -> R<()> {
 }
 
 /// Start a helper thread, or say why not. The OS may refuse (a process limit, no memory).
-fn spawn<'scope, 'env, T: Send + 'scope>(
+pub(crate) fn spawn<'scope, 'env, T: Send + 'scope>(
     scope: &'scope std::thread::Scope<'scope, 'env>,
     name: &str,
     f: impl FnOnce() -> T + Send + 'scope,

@@ -20,23 +20,35 @@ class Node:
 
     id = "node"
 
-    # Where a composed node sits in its text; nodes a callback makes itself have none of these.
-    _source: Any = None
-    _event: tuple | None = None
-    _end: int = 0
-    _start_mark: Any = None
-    _end_mark: Any = None
-    # Set by the composer: true when a plain scalar got its tag from the resolver, and the nodes,
-    # bytes of text and height the node stands for (what an alias to it is charged).
-    _implicit: bool = False
-    _merge_key: bool = False
-    _measure: tuple = (1, 0, 0)
+    # Slots: a document of a million nodes holds a million of these. The dict stays available
+    # (callbacks and subclasses may hang their own attributes on a node, as with PyYAML's).
+    __slots__ = (
+        "__dict__",
+        "__weakref__",
+        "_end",
+        "_end_mark",
+        "_event",
+        "_implicit",
+        "_merge_key",
+        "_source",
+        "_start_mark",
+        "tag",
+        "value",
+    )
 
     def __init__(self, tag: str, value: Any, start_mark: Any, end_mark: Any) -> None:
         self.tag = tag
         self.value = value
         self._start_mark = start_mark
         self._end_mark = end_mark
+        # Where a composed node sits in its text; nodes a callback makes itself have none of
+        # these. ``_implicit`` is true when a plain scalar got its tag from the resolver, and
+        # ``_merge_key`` when it is the key that merges.
+        self._source = None
+        self._event = None
+        self._end = 0
+        self._implicit = False
+        self._merge_key = False
 
     @property
     def start_mark(self) -> Any:
@@ -73,6 +85,7 @@ class Node:
 
 
 class ScalarNode(Node):
+    __slots__ = ("style",)
     id = "scalar"
 
     def __init__(
@@ -82,12 +95,28 @@ class ScalarNode(Node):
         start_mark: Any = None,
         end_mark: Any = None,
         style: str | None = None,
+        *,
+        source: Any = None,
+        event: tuple | None = None,
+        end: int = 0,
+        implicit: bool = False,
     ) -> None:
-        super().__init__(tag, value, start_mark, end_mark)
+        # Not ``super().__init__``: the composer makes one of these per scalar of a document.
+        self.tag = tag
+        self.value = value
+        self._start_mark = start_mark
+        self._end_mark = end_mark
+        self._source = source
+        self._event = event
+        self._end = end
+        self._implicit = implicit
+        self._merge_key = False
         self.style = style
 
 
 class CollectionNode(Node):
+    __slots__ = ("flow_style",)
+
     def __init__(
         self,
         tag: str,
@@ -95,8 +124,20 @@ class CollectionNode(Node):
         start_mark: Any = None,
         end_mark: Any = None,
         flow_style: bool | None = None,
+        *,
+        source: Any = None,
+        event: tuple | None = None,
+        end: int = 0,
     ) -> None:
-        super().__init__(tag, value, start_mark, end_mark)
+        self.tag = tag
+        self.value = value
+        self._start_mark = start_mark
+        self._end_mark = end_mark
+        self._source = source
+        self._event = event
+        self._end = end
+        self._implicit = False
+        self._merge_key = False
         self.flow_style = flow_style
 
     def _end_offset(self) -> int:
@@ -105,8 +146,10 @@ class CollectionNode(Node):
 
 
 class SequenceNode(CollectionNode):
+    __slots__ = ()
     id = "sequence"
 
 
 class MappingNode(CollectionNode):
+    __slots__ = ()
     id = "mapping"

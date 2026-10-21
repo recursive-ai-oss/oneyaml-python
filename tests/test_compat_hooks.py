@@ -632,7 +632,9 @@ def test_a_loader_with_unused_constructors_reads_through_the_backend(api, monkey
     assert cy.load("a: [1, yes]\n", Mine) == {"a": [1, True]}
     assert not calls
     assert cy.load("a: !s x\n", Mine) == {"a": "S"}
-    assert calls
+    # The native backend builds the document and composes only the node a callback takes over;
+    # the pure one composes the document from the events it already parsed.
+    assert bool(calls) == (api.name == "pure")
     # A syntax error is the backend's, and is reported without building nodes.
     calls.clear()
     with pytest.raises(cy.ParserError):

@@ -303,9 +303,10 @@ class _LoaderCore:
     """Reading a stream and handing out its documents; the loaders add the tables to it.
 
     A loader whose tables are the standard ones reads straight through the backend. One that
-    registered constructors tries the backend first and builds nodes only when the document
-    uses a tag the backend has no builder for. One that registered resolvers, or replaced a
-    standard constructor, always builds nodes.
+    registered constructors has the backend build the document, and nodes are made only for
+    what a callback takes over (the pure backend parses once and composes the whole document when
+    it meets such a tag). One that registered resolvers, or replaced a standard constructor,
+    always builds nodes.
     """
 
     _schema = "yaml11"
@@ -328,10 +329,10 @@ class _LoaderCore:
             self._input = _read(self.stream)[0]
         return self._input
 
-    def _compose(self, multi: bool) -> list[_engine._Doc]:
+    def _compose(self, multi: bool, parsed: Any = None) -> list[_engine._Doc]:
         try:
             return _engine.compose_documents(
-                self, self._data(), self.name, multi, _api._DEFAULT_LIMITS
+                self, self._data(), self.name, multi, _api._DEFAULT_LIMITS, parsed
             )
         except _BaseError as exc:
             raise _convert(exc, self.name) from None
@@ -340,16 +341,35 @@ class _LoaderCore:
         """The values by the backend, or the composed documents when callbacks must build them."""
         data = self._data()
         mode = _mode(type(self))
+        impl = _api._impl
+        parsed = None
         if mode < 2:
             try:
-                return _api._impl.load(data, _api._DEFAULT_LIMITS, multi, self._schema)
+                if mode == 1 and not multi and hasattr(impl, "load_hooked"):
+                    # The backend builds the document, except the nodes a callback takes over.
+                    hooks = _engine._Hooks(self, data, self.name, _api._DEFAULT_LIMITS)
+                    got = impl.load_hooked(data, _api._DEFAULT_LIMITS, hooks)
+                    if got is not None:
+                        return got[0]
+                    return self._read_nodes(multi, None)
+                if mode == 1 and hasattr(impl, "parse_stream"):
+                    # Parsed once: a node the backend cannot build is composed from the same events.
+                    parsed = impl.parse_stream(data, _api._DEFAULT_LIMITS, self._schema, multi)
+                    return impl.build_parsed(parsed, multi, self._schema)
+                return impl.load(data, _api._DEFAULT_LIMITS, multi, self._schema)
             except _BaseError as exc:
+                # An error a callback raised is PyYAML's already and stands as it is.
+                if isinstance(exc, YAMLError):
+                    raise
                 # A value the backend could not build (a tag it does not know, a tag that does
                 # not fit) may be one a callback takes over; every other error stands.
                 if mode == 0 or not getattr(exc, "construct", False):
                     raise _convert(exc, self.name) from None
+        return self._read_nodes(multi, parsed)
+
+    def _read_nodes(self, multi: bool, parsed: Any) -> list[_engine._Doc]:
         self._lazy = True
-        return self._compose(multi)
+        return self._compose(multi, parsed)
 
     # -- the loader interface --
 
@@ -361,6 +381,7 @@ class _LoaderCore:
         self.state_generators = []
         digits = _api._DEFAULT_LIMITS._native[8]
         self._cap = None if digits >= _NONE else digits
+        self._found = {}
         self._slow = _replaced(type(self))
         try:
             return self.construct_document(doc.root)
