@@ -515,6 +515,53 @@ def test_a_byte_order_mark_may_open_the_prefix_of_the_next_document(api, text):
     assert len(many(api, text)) == 2
 
 
+B = "\ufeff"
+STREAM = ["+STR", "+DOC", "+MAP", "=VAL :a", "=VAL :1", "-MAP", "-DOC", "-STR"]
+
+
+# Any number of marks may open a document prefix (a run of prefixes), at the start of the stream
+# and after a document end marker.
+@pytest.mark.parametrize(
+    "text",
+    [
+        B + B + "a: 1\n",
+        B * 3 + "a: 1\n",
+        B + "\n" + B + "a: 1\n",
+        B + B + "# note\na: 1\n",
+        (B + B + "a: 1\n").encode(),
+        (B + "a: 1\n").encode("utf-16"),
+        (B + "a: 1\n").encode("utf-32"),
+    ],
+)
+def test_several_byte_order_marks_open_the_first_document(api, text):
+    assert many(api, text) == [{"a": 1}]
+    assert api.events_text(text) == STREAM
+
+
+@pytest.mark.parametrize(
+    ("text", "values"),
+    [
+        ("a\n...\n" + B + B + "b: 1\n", ["a", {"b": 1}]),
+        ("a\n...\n" + B + B + "---\nb\n", ["a", "b"]),
+        ("a: 1\n" + B + B + "--- b\n", [{"a": 1}, "b"]),
+        ("a: 1\n...\n" + B * 3 + "\n---\nb\n", [{"a": 1}, "b"]),
+        ("a: 1\n...\n" + B + "\n" + B + "b: 1\n", [{"a": 1}, {"b": 1}]),
+        (B + B + "---\na\n", ["a"]),
+        (B + B, []),
+    ],
+)
+def test_several_byte_order_marks_open_a_later_document_prefix(api, text, values):
+    assert many(api, text) == values
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["a\n---\n" + B + B + "b\n", "x" + B + B, B + "a: 1\n" + B + B + "b: 2\n"],
+)
+def test_several_byte_order_marks_inside_a_document_are_refused(api, text):
+    fails(api, text, "syntax", multi=True)
+
+
 def test_a_byte_order_mark_inside_a_document_is_refused(api):
     fails(api, "a: 1\n\ufeff\nb: 2\n", "syntax")
 

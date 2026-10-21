@@ -113,7 +113,8 @@ def test_dump_writes_text_to_text_files_and_bytes_to_binary_files(api, tmp_path)
     path = tmp_path / "x.yaml"
     with open(path, "wb") as fp:
         doc.dump(fp)
-    with open(path, "w", encoding="utf-8") as fp:
+    # newline="" keeps Windows from turning the document's line breaks into CR LF.
+    with open(path, "w", encoding="utf-8", newline="") as fp:
         doc.dump(fp)
     assert path.read_bytes() == text.encode()
 

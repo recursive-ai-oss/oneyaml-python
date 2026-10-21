@@ -139,47 +139,11 @@ jobs:
           ONEYAML_TEST_BACKENDS: ${{ matrix.native && 'native,pure' || 'pure' }}
         run: ONEYAML_BACKEND=pure .venv/bin/python -m pytest -q -n auto -m "slow or not slow"
 
-  # Release-profile native wheel and the pure wheel, each installed into a fresh
-  # environment and imported. Adding a platform is a new matrix entry.
+  # Release-profile wheels: linux x86_64 for every interpreter plus the pure wheel, each
+  # installed into a fresh environment and tested. The other platforms build in release.yml.
   wheels:
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            name: linux-x86_64
-    name: wheels (${{ matrix.name }})
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
-        with:
-          python-version: '3.13'
-      - name: Build
-        run: |
-          uv venv -q build-env
-          uv pip install -q --python build-env 'maturin>=1.9,<2'
-          build-env/bin/maturin build -q --release -o dist -i build-env/bin/python
-          build-env/bin/python tools/build_pure.py dist
-          ls dist
-      - name: Install the native wheel and import it
-        run: |
-          uv venv -q env-native
-          uv pip install -q --python env-native --no-deps dist/*cp313*.whl
-          test "$(env-native/bin/python -c 'import oneyaml; print(oneyaml.backend)')" = native
-      - name: Install the pure wheel and import it
-        run: |
-          uv venv -q env-pure
-          uv pip install -q --python env-pure --no-deps dist/*-py3-none-any.whl
-          test "$(env-pure/bin/python -c 'import oneyaml; print(oneyaml.backend)')" = pure
-          if ONEYAML_BACKEND=native env-pure/bin/python -c 'import oneyaml' 2>/dev/null; then
-            echo "forcing the native backend should fail without the module"; exit 1
-          fi
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: wheels-${{ matrix.name }}
-          path: dist/*.whl
-          if-no-files-found: error
+    permissions:
+      contents: read
+    uses: ./.github/workflows/wheels.yml
+    with:
+      full: false
