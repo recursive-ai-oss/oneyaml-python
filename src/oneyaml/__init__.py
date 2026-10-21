@@ -14,7 +14,7 @@ from types import ModuleType
 from . import _api
 from ._api import load, load_all, loads, loads_all
 from ._document import Document, MappingView, Position, SequenceView, StaleViewError, parse
-from ._errors import LimitError, ParseError, YAMLError
+from ._errors import LimitError, ParseError, PatchError, YAMLError
 from ._limits import Limits
 from ._types import FrozenMapping, Tagged
 
@@ -33,6 +33,7 @@ __all__ = [
     "LimitError",
     "Limits",
     "ParseError",
+    "PatchError",
     "Tagged",
     "YAMLError",
     "__version__",

@@ -106,8 +106,17 @@ class _Core:
             self.floors.clear()
             self.floor = self.tick
 
+    def invalidate(self) -> None:
+        """Every view taken so far is stale: a patch changed the document in ways not tracked
+        edit by edit. A document's root is not a view of a node and stays good."""
+        self.tick += 1
+        self.dead.clear()
+        self.shifts.clear()
+        self.floors.clear()
+        self.floor = self.tick
+
     def stale(self, d: int, path: tuple, tick: int) -> bool:
-        if tick < self.floor:
+        if tick < self.floor and path:
             return True
         dead, shifts, floors = self.dead, self.shifts, self.floors
         key: tuple[str, ...] = (str(d),)
@@ -492,7 +501,41 @@ class Document(_Node):
         if not steps:
             return node if node._kind() != "scalar" else node.to_python()
         with self._core.lock:
+            # The engine reads the pointer by the text of the keys: two keys with the same text
+            # make it ambiguous, which is refused here rather than answered with one of them.
+            self._core.h.pointer(d, pointer)
             return node._view(tuple(steps))
+
+    def patch(self, ops: Any, *, document: int | None = None) -> None:
+        """Apply an RFC 6902 patch, all or nothing.
+
+        ``ops`` is a list of operation dicts (``{"op": "add", "path": "/a/b", "value": 1}``) or
+        JSON text. Pointers read keys by their text. On any failure the document is left
+        exactly as it was and a :class:`PatchError` names the operation and the reason. After a
+        patch that changed something, views taken before it are stale. ``document`` picks a
+        document of the stream (this handle's own by default).
+        """
+        self._apply("patch", ops, document)
+
+    def merge_patch(self, patch: Any, *, document: int | None = None) -> None:
+        """Apply an RFC 7396 merge patch (a JSON-shaped value; ``None`` members delete), all or
+        nothing, as :meth:`patch` does."""
+        self._apply("merge_patch", patch, document)
+
+    def _apply(self, how: str, patch: Any, document: int | None) -> None:
+        d = self._d if document is None else document
+        if isinstance(d, bool) or not isinstance(d, int):
+            raise TypeError(f"document must be an integer, not {type(d).__name__}")
+        if d < 0:
+            raise ValueError("document must not be negative")
+        if isinstance(patch, _Node):
+            patch = patch.to_python()
+        core = self._core
+        with core.lock:
+            before = core.h.version()
+            getattr(core.h, how)(min(d, sys.maxsize), patch)
+            if core.h.version() != before:
+                core.invalidate()
 
     def __repr__(self) -> str:
         return f"<Document {self.to_python()!r}>"

@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use oneyaml::Settings;
 use oneyaml_syntax::event::{Event, EventKind, ScalarStyle, Sourced, TagForm};
 
-use crate::scalar::{self, Plain};
+use crate::scalar::{self, Plain, Plain11};
 
 /// Ops handed over at a time.
 const BATCH: usize = 2048;
@@ -44,6 +44,25 @@ pub struct NodeProps<'s> {
     pub custom: Option<Cow<'s, str>>,
 }
 
+/// How scalars and tags are read.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    /// YAML 1.2 Core schema.
+    Core,
+    /// The YAML 1.1 rules of PyYAML's safe loader: more implicit types, merge keys, and the
+    /// standard tags built by a Python callback.
+    Yaml11,
+    /// Every scalar is text and tags are ignored.
+    Text,
+}
+
+/// What the translating stage needs to know about the load.
+#[derive(Clone, Copy)]
+pub struct Conv {
+    pub cap: usize,
+    pub mode: Mode,
+}
+
 pub enum Op<'s> {
     DocStart(usize),
     DocEnd,
@@ -55,6 +74,8 @@ pub enum Op<'s> {
     /// An integer too long for `i64`: decimal text with its sign, or radix digits (base 16/8).
     Num(Cow<'s, str>, u32, usize),
     Bytes(Vec<u8>, usize),
+    /// The plain scalar `<<` in a mapping-key position.
+    Merge(usize, bool),
     Prop(Box<Prop<'s>>, usize),
     Open {
         map: bool,
@@ -143,6 +164,44 @@ fn plain<'s>(text: Cow<'s, str>, cap: usize, at: usize) -> Op<'s> {
     }
 }
 
+fn plain11<'s>(text: Cow<'s, str>, cap: usize, at: usize) -> Op<'s> {
+    match scalar::classify11(&text) {
+        Plain11::Str => Op::Str(text, at),
+        Plain11::Null => Op::Null(at),
+        Plain11::Bool(b) => Op::Bool(b, at),
+        Plain11::Float(f) => Op::Float(f, at),
+        Plain11::Merge => Op::Merge(at, false),
+        Plain11::LongFloat => Op::Prop(
+            Box::new(Prop {
+                inner: Op::Str(text, at),
+                anchor: None,
+                custom: Some(Cow::Borrowed("tag:yaml.org,2002:float")),
+            }),
+            at,
+        ),
+        Plain11::Timestamp => Op::Prop(
+            Box::new(Prop {
+                inner: Op::Str(text, at),
+                anchor: None,
+                custom: Some(Cow::Borrowed("tag:yaml.org,2002:timestamp")),
+            }),
+            at,
+        ),
+        Plain11::Int(i, est) => {
+            if est > cap {
+                return digit_fail(est, cap, at);
+            }
+            Op::Int(i, at)
+        }
+        Plain11::Big(t, base, est) => {
+            if est > cap {
+                return digit_fail(est, cap, at);
+            }
+            Op::Num(Cow::Owned(t), base, at)
+        }
+    }
+}
+
 /// A scalar under a `!!` tag of the Core schema: the text must fit the type.
 fn core_scalar<'s>(tag: CoreTag, text: Cow<'s, str>, cap: usize, at: usize) -> Op<'s> {
     let bad = |what: &str| {
@@ -179,7 +238,9 @@ fn core_scalar<'s>(tag: CoreTag, text: Cow<'s, str>, cap: usize, at: usize) -> O
 }
 
 /// The anchor and tag written on a node.
-fn props<'s>(ev: &Sourced<'s, Event<'s>>) -> Result<(Option<&'s str>, Tag<'s>), Box<Failure>> {
+fn props<'s, const CORE: bool>(
+    ev: &Sourced<'s, Event<'s>>,
+) -> Result<(Option<&'s str>, Tag<'s>), Box<Failure>> {
     let Some(p) = ev.properties() else {
         return Ok((None, Tag::None));
     };
@@ -201,9 +262,10 @@ fn props<'s>(ev: &Sourced<'s, Event<'s>>) -> Result<(Option<&'s str>, Tag<'s>), 
                 }));
             }
             Some(t) if t.form == TagForm::NonSpecific => Tag::NonSpecific,
+            // Under YAML 1.1 every tag goes to the callback, which knows the whole set.
             Some(t) => match core_tag(&t.resolved) {
-                Some(c) => Tag::Core(c),
-                None => Tag::Custom(t.resolved),
+                Some(c) if CORE => Tag::Core(c),
+                _ => Tag::Custom(t.resolved),
             },
         }
     } else {
@@ -212,20 +274,29 @@ fn props<'s>(ev: &Sourced<'s, Event<'s>>) -> Result<(Option<&'s str>, Tag<'s>), 
     Ok((anchor, tag))
 }
 
-fn scalar_op<'s>(ev: &Sourced<'s, Event<'s>>, style: ScalarStyle, cap: usize) -> Op<'s> {
+fn scalar_op<'s, const CORE: bool>(
+    ev: &Sourced<'s, Event<'s>>,
+    style: ScalarStyle,
+    conv: Conv,
+) -> Op<'s> {
     let at = ev.span().start;
     let Some(text) = ev.value() else {
         return fail("other", "scalar text unavailable", at);
     };
-    let (anchor, tag) = match props(ev) {
+    let (anchor, tag) = match props::<CORE>(ev) {
         Ok(p) => p,
         Err(f) => return Op::Fail(f),
     };
+    let cap = conv.cap;
+    if !CORE {
+        return other_scalar(conv, tag, style, text, anchor, at);
+    }
     scalar_parts(text, style == ScalarStyle::Plain, anchor, tag, at, cap)
 }
 
-/// The op for a scalar whose text, style and properties are known, from an event or from a
-/// node of a lossless document.
+/// The op for a Core-schema scalar whose text, style and properties are known, from an event or
+/// from a node of a lossless document.
+#[inline(always)]
 pub fn scalar_parts<'s>(
     text: Cow<'s, str>,
     is_plain: bool,
@@ -263,16 +334,63 @@ pub fn scalar_parts<'s>(
     }
 }
 
-fn open_op<'s>(ev: &Sourced<'s, Event<'s>>, map: bool) -> Op<'s> {
+/// A scalar under the YAML 1.1 rules or as plain text.
+fn other_scalar<'s>(
+    conv: Conv,
+    tag: Tag<'s>,
+    style: ScalarStyle,
+    text: Cow<'s, str>,
+    anchor: Option<&'s str>,
+    at: usize,
+) -> Op<'s> {
+    let (inner, custom) = if conv.mode == Mode::Text {
+        (Op::Str(text, at), None)
+    } else {
+        match tag {
+            Tag::None if style == ScalarStyle::Plain => (plain11(text, conv.cap, at), None),
+            Tag::None | Tag::NonSpecific => (Op::Str(text, at), None),
+            // `!!merge` makes any scalar a merge key.
+            Tag::Custom(t) if t == "tag:yaml.org,2002:merge" => (Op::Merge(at, true), None),
+            Tag::Custom(t) => (Op::Str(text, at), Some(t)),
+            Tag::Core(_) => (Op::Str(text, at), None),
+        }
+    };
+    match inner {
+        Op::Fail(_) => inner,
+        // An implicit timestamp is already a `Prop`; an anchor goes around it.
+        Op::Prop(mut p, pat) => {
+            p.anchor = anchor;
+            Op::Prop(p, pat)
+        }
+        inner if anchor.is_none() && custom.is_none() => inner,
+        inner => Op::Prop(
+            Box::new(Prop {
+                inner,
+                anchor,
+                custom,
+            }),
+            at,
+        ),
+    }
+}
+
+fn open_op<'s, const CORE: bool>(ev: &Sourced<'s, Event<'s>>, map: bool, mode: Mode) -> Op<'s> {
     let at = ev.span().start;
-    let (anchor, tag) = match props(ev) {
+    let (anchor, tag) = match props::<CORE>(ev) {
         Ok(p) => p,
         Err(f) => return Op::Fail(f),
+    };
+    // Text mode ignores tags: no tag is kept and none can disagree with its collection.
+    let tag = if !CORE && mode == Mode::Text {
+        Tag::None
+    } else {
+        tag
     };
     open_parts(map, anchor, tag, at)
 }
 
 /// The op that opens a collection with the given properties.
+#[inline(always)]
 pub fn open_parts<'s>(map: bool, anchor: Option<&'s str>, tag: Tag<'s>, at: usize) -> Op<'s> {
     let custom = match tag {
         Tag::None | Tag::NonSpecific => None,
@@ -297,11 +415,29 @@ pub fn open_parts<'s>(map: bool, anchor: Option<&'s str>, tag: Tag<'s>, at: usiz
 
 /// What an event means for a load; None for events that carry nothing (white space, comments,
 /// directives, the stream's ends).
-pub fn translate<'s>(ev: &Sourced<'s, Event<'s>>, cap: usize) -> Option<Op<'s>> {
+pub fn translate<'s>(ev: &Sourced<'s, Event<'s>>, conv: Conv) -> Option<Op<'s>> {
     Some(match ev.kind() {
-        EventKind::Scalar { style, .. } => scalar_op(ev, *style, cap),
-        EventKind::SequenceStart { .. } => open_op(ev, false),
-        EventKind::MappingStart { .. } => open_op(ev, true),
+        EventKind::Scalar { style, .. } => {
+            if conv.mode == Mode::Core {
+                scalar_op::<true>(ev, *style, conv)
+            } else {
+                scalar_op::<false>(ev, *style, conv)
+            }
+        }
+        EventKind::SequenceStart { .. } => {
+            if conv.mode == Mode::Core {
+                open_op::<true>(ev, false, conv.mode)
+            } else {
+                open_op::<false>(ev, false, conv.mode)
+            }
+        }
+        EventKind::MappingStart { .. } => {
+            if conv.mode == Mode::Core {
+                open_op::<true>(ev, true, conv.mode)
+            } else {
+                open_op::<false>(ev, true, conv.mode)
+            }
+        }
         EventKind::SequenceEnd | EventKind::MappingEnd => Op::Close,
         EventKind::Alias => match ev.alias_name() {
             Some(name) => Op::Alias(name, ev.span().start),
@@ -354,10 +490,10 @@ pub fn pull<'s>(
 }
 
 /// The ops for a batch of events. The batch ends at the first failure.
-pub fn translate_batch<'s>(events: Vec<Sourced<'s, Event<'s>>>, digit_cap: usize) -> Vec<Op<'s>> {
+pub fn translate_batch<'s>(events: Vec<Sourced<'s, Event<'s>>>, conv: Conv) -> Vec<Op<'s>> {
     let mut ops = Vec::with_capacity(events.len());
     for ev in &events {
-        let Some(op) = translate(ev, digit_cap) else {
+        let Some(op) = translate(ev, conv) else {
             continue;
         };
         let stop = matches!(op, Op::Fail(_));

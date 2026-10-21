@@ -19,8 +19,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::thread::{self, ThreadId};
 
 use oneyaml::{
-    ColumnUnit, Document, DocumentMut, EditError, LineIndex, NodeId, NodeKind, NodeRef,
-    ScalarStyle, Stream, Value,
+    ColumnUnit, Document, DocumentMut, EditError, LineIndex, MergePatch, NodeId, NodeKind, NodeRef,
+    Patch, PatchErrorKind, PatchOp, ScalarStyle, Stream, Value,
 };
 use oneyaml_syntax::decode_strict;
 use pyo3::buffer::PyBuffer;
@@ -708,6 +708,21 @@ impl Handle {
     }
 }
 
+/// The Python exception for a failed patch: its kind is the category (the edit layer's own
+/// refusals are `other`), and the failing operation's index rides along.
+fn patch_pyerr(py: Python<'_>, e: &oneyaml::PatchError) -> PyErr {
+    let category = match e.kind() {
+        PatchErrorKind::Edit => "other",
+        kind => kind.name(),
+    };
+    let build = || -> PyResult<PyErr> {
+        let make = classes::make_patch_error(py)?;
+        let err = make.call1((e.to_string(), category, e.op_index()))?;
+        Ok(PyErr::from_value(err))
+    };
+    build().unwrap_or_else(|e| e)
+}
+
 fn style_name(n: NodeRef<'_>) -> &'static str {
     match n.kind() {
         NodeKind::Alias => "alias",
@@ -953,6 +968,70 @@ impl Handle {
             Ok((style, tag, anchor, comment, line, column)
                 .into_pyobject(py)?
                 .into_any())
+        })
+    }
+
+    /// Apply an RFC 6902 patch to document `d`, all or nothing. `ops` is a list of operation
+    /// objects, or JSON text. Values are converted before the lock is taken.
+    fn patch(&self, py: Python<'_>, d: usize, ops: &Bound<'_, PyAny>) -> PyResult<()> {
+        guarded(py, || {
+            let patch = if let Ok(text) = ops.cast::<PyString>() {
+                let text = text.to_str().map_err(|_| {
+                    raise(
+                        py,
+                        "the patch holds a lone surrogate, which is not text",
+                        "encoding",
+                        None,
+                        None,
+                    )
+                })?;
+                Patch::from_json(text)
+            } else {
+                Patch::from_value(self.to_value(py, ops)?)
+            }
+            .map_err(|e| patch_pyerr(py, &e))?;
+            let writes = patch
+                .ops()
+                .iter()
+                .any(|op| !matches!(op, PatchOp::Test { .. }));
+            let mut st = self.lock(py)?;
+            st.stream
+                .apply_patch(d, &patch)
+                .map_err(|e| patch_pyerr(py, &e))?;
+            if writes {
+                changed(&mut st, true);
+            }
+            Ok(())
+        })
+    }
+
+    /// Apply an RFC 7396 merge patch (a value) to document `d`, all or nothing.
+    fn merge_patch(&self, py: Python<'_>, d: usize, patch: &Bound<'_, PyAny>) -> PyResult<()> {
+        guarded(py, || {
+            let patch = MergePatch::new(self.to_value(py, patch)?);
+            let mut st = self.lock(py)?;
+            st.stream
+                .apply_merge_patch(d, &patch)
+                .map_err(|e| patch_pyerr(py, &e))?;
+            changed(&mut st, true);
+            Ok(())
+        })
+    }
+
+    /// Whether an RFC 6901 pointer names a node, read by the key's text. A pointer that two keys
+    /// match, or that is not a pointer, is an error; a missing path is `False`.
+    fn pointer(&self, py: Python<'_>, d: usize, pointer: &str) -> PyResult<bool> {
+        guarded(py, || {
+            let st = self.lock(py)?;
+            let doc = st
+                .stream
+                .document(d)
+                .ok_or_else(|| PyIndexError::new_err(format!("no document {d} in the stream")))?;
+            match doc.get_pointer(pointer) {
+                Ok(_) => Ok(true),
+                Err(e) if e.kind() == PatchErrorKind::Path => Ok(false),
+                Err(e) => Err(patch_pyerr(py, &e)),
+            }
         })
     }
 
