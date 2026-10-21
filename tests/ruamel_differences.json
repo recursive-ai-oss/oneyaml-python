@@ -1,0 +1,1097 @@
+{
+ "rt:own/diagnostics/anchor-directly-before-flow-collection": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/diagnostics/bom-in-a-block-scalar-is-an-error": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/diagnostics/bom-in-a-comment-is-an-error": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/diagnostics/bom-inside-a-plain-scalar-is-an-error": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/diagnostics/c1-control-in-a-comment-is-an-error": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/diagnostics/closing-quote-at-the-margin-of-a-nested-scalar": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/diagnostics/closing-single-quote-at-the-margin-of-a-sequence-entry": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/diagnostics/del-in-a-comment-is-an-error": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/diagnostics/empty-key-with-adjacent-flow-value-is-invalid": {
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/diagnostics/explicit-key-with-adjacent-flow-value-is-invalid": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/diagnostics/plain-key-with-adjacent-flow-value-is-invalid": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/diagnostics/property-only-key-with-adjacent-flow-value-is-invalid": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/diagnostics/second-bare-document-after-a-byte-order-mark-is-an-error": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/diagnostics/verbatim-tag-of-a-lone-bang-is-invalid": {
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/diagnostics/verbatim-tag-that-is-not-a-uri-is-invalid": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/edit/keep-comment-after-value-spacing": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/edit/keep-directives-and-start-marker": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/edit/keep-tab-after-colon": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/edit/keep-tag-on-parent": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/edit/keep-utf-16be-without-bom": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/edit/patch-copy-of-alias-past-anchor-is-bounded": {
+  "native": "the limits refuse input that ruamel builds",
+  "pure": "the limits refuse input that ruamel builds"
+ },
+ "rt:own/edit/read-nonspecific-tag-is-string": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/edit/remove-empty-key-of-flow-single-pair": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/edit/replace-custom-tagged-scalar-then-edit-neighbour": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/edit/test-error-str-tag-is-not-integer": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/edit/test-explicit-str-tag": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/parse/alias-in-redefinition-after-earlier-anchor-is-recursive": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/parse/block-scalar-of-only-blank-lines-is-empty": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/parse/bom-then-comment-after-bare-document": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/parse/local-tag-beginning-with-a-bang-keeps-its-tag": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/parse/local-tag-with-hash": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/parse/next-line-is-not-a-line-break": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/parse/properties-need-separation-before-flow-collection": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/parse/tab-before-properties-whose-collection-starts-on-the-next-line": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/parse/tab-only-line-after-block-scalar-at-end": {
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/parse/tag-handle-directive": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/parse/tag-separated-from-flow-sequence-by-a-space": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/parse/tag-suffix-utf-8-percent-escape-is-kept": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/parse/top-level-literal-with-indentation-indicator": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/parse/verbatim-tag-with-fragment": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/parse/yaml-directive-version-1-3-is-accepted": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/roundtrip/anchors-aliases-and-tags": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/roundtrip/directives": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/roundtrip/line-separator-characters-in-content": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/roundtrip/realistic-compose-with-merge-keys": {
+  "native": "rt keeps a merge key as an ordinary key; ruamel merges it",
+  "pure": "rt keeps a merge key as an ordinary key; ruamel merges it"
+ },
+ "rt:own/roundtrip/tabs-as-separation": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/roundtrip/trailing-spaces-and-blank-lines": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/roundtrip/utf-32be-without-bom": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:own/safety/alias-bomb-events-stay-unexpanded": {
+  "native": "the limits refuse input that ruamel builds",
+  "pure": "the limits refuse input that ruamel builds"
+ },
+ "rt:own/safety/alias-byte-expansion-bomb": {
+  "native": "the limits refuse input that ruamel builds",
+  "pure": "the limits refuse input that ruamel builds"
+ },
+ "rt:own/safety/alias-expansion-bomb": {
+  "native": "the limits refuse input that ruamel builds",
+  "pure": "the limits refuse input that ruamel builds"
+ },
+ "rt:own/safety/alias-expansion-bomb-ten-by-ten": {
+  "native": "the limits refuse input that ruamel builds",
+  "pure": "the limits refuse input that ruamel builds"
+ },
+ "rt:own/schema/code-constructing-tags-are-kept-or-refused": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/schema/core-float-forms": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/schema/core-legacy-numbers-are-strings": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/schema/escaped-high-surrogate-before-hex-escape-is-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/schema/escaped-high-surrogate-before-long-escape-is-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/schema/escaped-high-surrogate-before-plain-character-is-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/schema/escaped-lone-surrogate-is-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/schema/escaped-mismatched-surrogates-are-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/schema/escaped-surrogate-pair-is-one-character": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/schema/escaped-two-high-surrogates-are-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/schema/explicit-str-tag": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/schema/explicit-tags-force-the-type": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/schema/global-tag-uri-is-kept": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/schema/local-tag-on-a-collection-is-kept": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/schema/mapping-as-a-mapping-key": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/schema/merge-key-in-a-flow-mapping-is-an-ordinary-key": {
+  "native": "rt keeps a merge key as an ordinary key; ruamel merges it",
+  "pure": "rt keeps a merge key as an ordinary key; ruamel merges it"
+ },
+ "rt:own/schema/merge-key-is-an-ordinary-key": {
+  "native": "rt keeps a merge key as an ordinary key; ruamel merges it",
+  "pure": "rt keeps a merge key as an ordinary key; ruamel merges it"
+ },
+ "rt:own/schema/unresolved-tag-is-kept": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/2AUY": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/2XXW": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/4ABK": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:yts/4FJ6": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/4MUZ/00": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/4MUZ/01": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/4MUZ/02": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/4QFQ": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/5MUD": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/652Z": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:yts/6BCT": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/6CA3": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/6CK3": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/6JWB": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/74H7": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/7FWL": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/9C9N": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:yts/9JBA": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:yts/9MMW": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/9SA2": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/A2M4": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/BEC7": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/C4HZ": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/CC74": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/CFD4": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/CUP7": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/CVW2": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:yts/DC7X": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/DK95/00": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/DK95/01": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:yts/DK95/03": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/DK95/04": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/DK95/05": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/DK95/07": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/DWX9": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/EHF6": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/F2C7": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/FH7J": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/FRK4": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:yts/G5U8": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:yts/HM87/01": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:yts/HMQ5": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/HS5T": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/HWV9": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/J3BT": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/J7PZ": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/JEF9/02": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:yts/K3WX": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/K54U": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/L24T/01": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:yts/L94M": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/LE5A": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/M2N8/00": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:yts/M2N8/01": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:yts/M5C3": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/MUS6/03": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/NB6Z": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/NJ66": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/P76L": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/P94K": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/Q5MG": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/Q9WF": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:yts/QB6E": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:yts/QT73": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/R4YG": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/S4JQ": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/SU5Z": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:yts/T26H": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/U3C3": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/U99R": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:yts/UGM3": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/UKK6/02": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/UV7Q": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/V9D5": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:yts/VJP3/01": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/WZ62": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/Y79Y/003": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:yts/Y79Y/010": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "rt:yts/YJV2": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:yts/Z67P": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:yts/Z9M4": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "safe:own/diagnostics/anchor-directly-before-flow-collection": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/diagnostics/bom-in-a-block-scalar-is-an-error": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/diagnostics/bom-in-a-comment-is-an-error": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/diagnostics/bom-inside-a-plain-scalar-is-an-error": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/diagnostics/c1-control-in-a-comment-is-an-error": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/diagnostics/closing-quote-at-the-margin-of-a-nested-scalar": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/diagnostics/closing-single-quote-at-the-margin-of-a-sequence-entry": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/diagnostics/del-in-a-comment-is-an-error": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/diagnostics/empty-key-with-adjacent-flow-value-is-invalid": {
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/diagnostics/explicit-key-with-adjacent-flow-value-is-invalid": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/diagnostics/plain-key-with-adjacent-flow-value-is-invalid": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/diagnostics/property-only-key-with-adjacent-flow-value-is-invalid": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/diagnostics/second-bare-document-after-a-byte-order-mark-is-an-error": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/diagnostics/verbatim-tag-of-a-lone-bang-is-invalid": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/diagnostics/verbatim-tag-that-is-not-a-uri-is-invalid": {
+  "native": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/edit/keep-comment-after-value-spacing": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/edit/keep-directives-and-start-marker": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/edit/keep-tab-after-colon": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/edit/keep-tag-on-parent": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/edit/patch-copy-of-alias-past-anchor-is-bounded": {
+  "native": "the limits refuse input that ruamel builds",
+  "pure": "the limits refuse input that ruamel builds"
+ },
+ "safe:own/edit/read-nonspecific-tag-is-string": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/edit/remove-empty-key-of-flow-single-pair": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/edit/replace-custom-tagged-scalar-then-edit-neighbour": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/parse/alias-in-redefinition-after-earlier-anchor-is-recursive": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/parse/block-scalar-of-only-blank-lines-is-empty": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/parse/bom-then-comment-after-bare-document": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/parse/local-tag-beginning-with-a-bang-keeps-its-tag": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/parse/local-tag-with-hash": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/parse/next-line-is-not-a-line-break": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/parse/tab-before-properties-whose-collection-starts-on-the-next-line": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/parse/tab-only-line-after-block-scalar-at-end": {
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/parse/tag-handle-directive": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/parse/tag-separated-from-flow-sequence-by-a-space": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/parse/tag-suffix-utf-8-percent-escape-is-kept": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/parse/top-level-literal-with-indentation-indicator": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/parse/verbatim-tag-with-fragment": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/parse/yaml-directive-version-1-3-is-accepted": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/roundtrip/anchors-aliases-and-tags": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/roundtrip/directives": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/roundtrip/line-separator-characters-in-content": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/roundtrip/tabs-as-separation": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/roundtrip/trailing-spaces-and-blank-lines": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/safety/alias-bomb-events-stay-unexpanded": {
+  "native": "the limits refuse input that ruamel builds",
+  "pure": "the limits refuse input that ruamel builds"
+ },
+ "safe:own/safety/alias-byte-expansion-bomb": {
+  "native": "the limits refuse input that ruamel builds",
+  "pure": "the limits refuse input that ruamel builds"
+ },
+ "safe:own/safety/alias-expansion-bomb": {
+  "native": "the limits refuse input that ruamel builds",
+  "pure": "the limits refuse input that ruamel builds"
+ },
+ "safe:own/safety/alias-expansion-bomb-ten-by-ten": {
+  "native": "the limits refuse input that ruamel builds",
+  "pure": "the limits refuse input that ruamel builds"
+ },
+ "safe:own/schema/code-constructing-tags-are-kept-or-refused": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/schema/core-float-forms": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/schema/core-legacy-numbers-are-strings": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/schema/escaped-high-surrogate-before-hex-escape-is-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/schema/escaped-high-surrogate-before-long-escape-is-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/schema/escaped-high-surrogate-before-plain-character-is-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/schema/escaped-lone-surrogate-is-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/schema/escaped-mismatched-surrogates-are-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/schema/escaped-surrogate-pair-is-one-character": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/schema/escaped-two-high-surrogates-are-refused": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:own/schema/global-tag-uri-is-kept": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/schema/local-tag-on-a-collection-is-kept": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/schema/mapping-as-a-mapping-key": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/schema/unresolved-tag-is-kept": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/4ABK": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:yts/4FJ6": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/4MUZ/00": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/4MUZ/01": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/4MUZ/02": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/4QFQ": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/5MUD": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/652Z": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:yts/6BCT": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/6CA3": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/6CK3": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/7FWL": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/9C9N": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:yts/9JBA": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:yts/9MMW": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/9SA2": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/A2M4": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/BEC7": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/C4HZ": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/CC74": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/CFD4": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/CUP7": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/CVW2": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:yts/DC7X": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/DK95/00": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/DK95/01": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:yts/DK95/03": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/DK95/04": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/DK95/05": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/DK95/07": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/DWX9": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/FRK4": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:yts/G5U8": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:yts/HM87/01": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:yts/HS5T": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/HWV9": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/J3BT": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/JEF9/02": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:yts/K3WX": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/K54U": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/L24T/01": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:yts/M2N8/00": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/M2N8/01": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/M5C3": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/MUS6/03": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/NB6Z": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/NJ66": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/P76L": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/Q5MG": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/Q9WF": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/QB6E": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:yts/QT73": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/R4YG": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/S4JQ": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:yts/SU5Z": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:yts/T26H": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/UGM3": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/UKK6/02": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:yts/UV7Q": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/V9D5": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/VJP3/01": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/WZ62": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/Y79Y/003": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:yts/Y79Y/010": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/YJV2": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "safe:yts/Z67P": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:yts/Z9M4": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ }
+}

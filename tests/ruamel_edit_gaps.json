@@ -1,0 +1,169 @@
+{
+ "own/diagnostics/verbatim-tag-of-a-lone-bang-is-invalid|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/diagnostics/verbatim-tag-that-is-not-a-uri-is-invalid|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/edit/alias-refusal-remove-container-of-anchor-with-aliases|set-last-leaf-int": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/edit/alias-replace-alias-node-scalar|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/edit/copy-from-an-alias-to-a-redefined-anchor-reads-the-latest|set-last-leaf-int": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/edit/keep-anchor-and-alias-elsewhere|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/edit/keep-directives-and-start-marker|set-first-leaf": {
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/edit/keep-tag-on-parent|set-first-leaf": {
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/edit/patch-copies-of-written-out-aliases-are-charged|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/edit/remove-explicit-first-key-before-empty-explicit-key-in-flow-mapping|set-first-leaf": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "own/edit/replace-custom-tagged-scalar-then-edit-neighbour|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/edit/set-empty-value-of-explicit-key-on-next-line|del-first-key": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "own/parse/anchor-and-alias|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/parse/block-scalar-of-only-blank-lines-is-empty|set-first-leaf": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "own/parse/local-tag-beginning-with-a-bang-keeps-its-tag|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/parse/redefined-anchor-alias-is-the-latest-node|set-last-leaf-int": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/roundtrip/anchors-aliases-and-tags|set-first-leaf": {
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/safety/long-anchor-name|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/safety/many-anchors-and-aliases|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/schema/alias-as-a-mapping-key|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "own/schema/anchor-keeps-the-resolved-type|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/3GZX|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/4ABK|set-first-leaf": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/4FJ6|add-key-deep": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/4FJ6|append": {
+  "pure": "the engine edit does not read back as the edited data (unreadable)"
+ },
+ "yts/4FJ6|insert-seq": {
+  "pure": "the engine edit does not read back as the edited data (unreadable)"
+ },
+ "yts/6CK3|set-first-leaf": {
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/6KGN|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/7FWL|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/8KB6|set-last-leaf-int": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/9BXH|set-last-leaf-int": {
+  "pure": "the engine edit does not read back as the edited data (unreadable)"
+ },
+ "yts/9MMW|add-key-deep": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/CUP7|set-last-leaf-int": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/DFF7|set-last-leaf-int": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/E76Z|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/FRK4|set-first-leaf": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/JS2J|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/L24T/00|add-key": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/L24T/00|add-key-deep": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/L24T/00|set-first-leaf": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/L24T/01|add-key": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/L24T/01|add-key-deep": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/L24T/01|set-first-leaf": {
+  "pure": "the engine edit does not read back as the edited data (wrong)"
+ },
+ "yts/M5C3|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/V55R|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/W5VH|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/Z67P|set-first-leaf": {
+  "native": "the plain-data check does not model a kept tag or an alias target",
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ },
+ "yts/Z9M4|set-first-leaf": {
+  "pure": "the plain-data check does not model a kept tag or an alias target"
+ }
+}
