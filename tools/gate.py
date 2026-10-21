@@ -5,6 +5,7 @@ Usage: python tools/gate.py
 Environment:
     GATE_WORK   scratch directory for the venv, build output and wheels (required: nothing
                 is written into the repository)
+    GATE_SLOW   set to 1 to include the tests marked slow (CI always runs them)
     GATE_PYTHON interpreter version for the venv (default 3.13; e.g. 3.14t)
     PUBLICTEXT_PATTERNS  pattern file for the public-text step (generic checks only if unset)
 """
@@ -54,7 +55,10 @@ def main() -> int:
         e = dict(env)
         if backend:
             e["ONEYAML_BACKEND"] = backend
-        return lambda: run([py, "-m", "pytest", "-q", "-n", WORKERS, "-p", "no:cacheprovider"], e)
+        # Stress, scaling and exhaustive tests (marked slow) run in CI; GATE_SLOW=1 adds them here.
+        select = [] if os.environ.get("GATE_SLOW") else ["-m", "not slow"]
+        cmd = [py, "-m", "pytest", "-q", "-n", WORKERS, "-p", "no:cacheprovider", *select]
+        return lambda: run(cmd, e)
 
     def run(cmd, e=env, cwd=ROOT):
         return subprocess.run(cmd, env=e, cwd=cwd).returncode == 0
