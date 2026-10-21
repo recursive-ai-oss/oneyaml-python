@@ -8,12 +8,14 @@
 use pyo3::prelude::*;
 
 mod classes;
+mod document;
 mod errors;
 mod events;
 mod hook;
 mod input;
 mod limits;
 mod ops;
+mod pyvalue;
 mod reader;
 mod scalar;
 mod writer;
@@ -32,14 +34,29 @@ fn probe(py: Python<'_>, data: &[u8]) -> PyResult<bool> {
 }
 
 /// Read YAML into Python objects: one document, or a list of all of them when `multi`.
+///
+/// `schema` is `"core"` (YAML 1.2), `"yaml11"` (the rules of PyYAML's safe loader) or `"text"`
+/// (every scalar a string, tags ignored).
 #[pyfunction]
+#[pyo3(signature = (data, limits, multi, schema = "core"))]
 fn load<'py>(
     py: Python<'py>,
     data: &Bound<'py, PyAny>,
     limits: &Bound<'py, PyAny>,
     multi: bool,
+    schema: &str,
 ) -> PyResult<Bound<'py, PyAny>> {
-    guarded(py, || reader::load(py, data, limits, multi))
+    let mode = match schema {
+        "core" => ops::Mode::Core,
+        "yaml11" => ops::Mode::Yaml11,
+        "text" => ops::Mode::Text,
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unknown schema {schema:?}"
+            )));
+        }
+    };
+    guarded(py, || reader::load(py, data, limits, multi, mode))
 }
 
 /// Write Python objects as YAML text, one document each. `opts` is
@@ -102,6 +119,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_function(wrap_pyfunction!(dump, m)?)?;
     m.add_function(wrap_pyfunction!(_dump_path_ops, m)?)?;
+    m.add_function(wrap_pyfunction!(document::parse, m)?)?;
+    m.add_class::<document::Handle>()?;
+    m.add_class::<document::Prepared>()?;
     m.add_function(wrap_pyfunction!(events_text, m)?)?;
     m.add_function(wrap_pyfunction!(_parse_only, m)?)?;
     m.add_function(wrap_pyfunction!(_panic_probe, m)?)?;

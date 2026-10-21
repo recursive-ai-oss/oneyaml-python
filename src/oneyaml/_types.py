@@ -178,6 +178,9 @@ def freeze(obj: Any, max_nodes: int, max_bytes: int) -> tuple[Any, int, int]:
                 keys = list(item)
                 work.append((item, ("map", keys)))
                 work.extend((item[k], None) for k in reversed(keys))
+            elif t is set or t is frozenset:
+                work.append((item, ("set", len(item))))
+                work.extend((child, None) for child in item)
             elif t is Tagged:
                 work.append((item, ("tag", None)))
                 work.append((item.value, None))
@@ -196,6 +199,10 @@ def freeze(obj: Any, max_nodes: int, max_bytes: int) -> tuple[Any, int, int]:
                 parts = out[len(out) - extra :]
                 del out[len(out) - extra :]
                 out.append(tuple(parts))
+            elif kind == "set":
+                parts = out[len(out) - extra :]
+                del out[len(out) - extra :]
+                out.append(frozenset(parts))
             elif kind == "map":
                 n = len(extra)
                 parts = out[len(out) - n :]

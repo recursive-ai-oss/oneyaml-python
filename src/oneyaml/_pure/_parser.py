@@ -798,7 +798,7 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
                     raise fail(j + 1, "an alias needs a name")
                 name = am.group()
                 if name not in anchors:
-                    raise fail(j, f"the alias {name} has no anchor")
+                    raise fail(j, f"alias *{name} has no anchor")
                 a = j
                 j = am.end()
                 app((ALIAS, a, j, name))
@@ -1211,7 +1211,7 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
                         raise fail(j + 1, "an alias needs a name")
                     name = am.group()
                     if name not in anchors:
-                        raise fail(j, f"the alias {name} has no anchor")
+                        raise fail(j, f"alias *{name} has no anchor")
                     e = am.end()
                     node = (ALIAS, j, e, name)
                     style = ""

@@ -44,6 +44,17 @@ from ._resolve import (
     number,
     tagged_scalar,
 )
+from ._resolve11 import (
+    KEYWORDS11,
+    MERGE,
+    NUMBER_START11,
+    WORD_START11,
+    number11,
+    tag_collection11,
+    tag_collection_text,
+    tagged_scalar11,
+    tagged_scalar_text,
+)
 
 _OPEN = object()  # an anchor whose node is not finished yet
 _MISSING = object()
@@ -51,13 +62,17 @@ _MISSING = object()
 # interpreter, which recurses in C once per level; real keys are a few levels at most. Fixed:
 # it does not follow ``Limits``, and the native backend uses the same number.
 KEY_DEPTH = 200
-_COLLECTIONS = (list, tuple, dict, FrozenMapping, Tagged)
+_COLLECTIONS = (list, tuple, dict, FrozenMapping, Tagged, set, frozenset)
 _UNFROZEN = (list, dict, Tagged)
 
 
-def load(data: Any, limits: Any, multi: bool) -> Any:
+def load(data: Any, limits: Any, multi: bool, schema: str = "core") -> Any:
     """The value of the single document in ``data`` (``multi=False``) or a list of every
-    document (``multi=True``). ``limits`` is a ``Limits``."""
+    document (``multi=True``). ``limits`` is a ``Limits``. ``schema`` is ``"core"`` (YAML 1.2),
+    ``"yaml11"`` (the rules of PyYAML's safe loader) or ``"text"`` (every scalar a string,
+    tags ignored)."""
+    if schema not in _SCHEMAS:
+        raise ValueError(f"unknown schema {schema!r}")
     depth, nf, nfloor, bf, bfloor, input_size, scalar_size, documents, digits = limits._native
     binary = isinstance(data, (bytes, bytearray, memoryview))
     if input_size < _NONE and binary and len(data) > input_size:
@@ -80,11 +95,11 @@ def load(data: Any, limits: Any, multi: bool) -> Any:
             # that comes before the syntax error first.
             raw = exc.__dict__.pop("raw_events", None)
             if raw:
-                _build(text, raw, *args, partial=True)
+                _build(text, raw, *args, partial=True, schema=schema)
             raise
         if scalar_size < _NONE or documents < _NONE:
             _check_sizes(events, scalar_size, documents)
-        docs = _build(text, events, *args)
+        docs = _build(text, events, *args, schema=schema)
     except Fail as exc:
         off = exc.offset
         line, col = linecol(text, 0 if off is None else off)
@@ -130,6 +145,7 @@ def _build(  # noqa: C901
     depth: int | None,
     budget: tuple[int, int, int, int],
     partial: bool = False,
+    schema: str = "core",
 ) -> list[Any]:
     nf, nfloor, bf, bfloor = budget
     wide: dict[int, float] = {}
@@ -145,9 +161,10 @@ def _build(  # noqa: C901
     pop = stack.pop
     cur: list[Any] = []
     add = cur.append
-    keywords = KEYWORDS
-    number_start = NUMBER_START
-    word_start = WORD_START
+    keywords, number_start, word_start, number, tagged_scalar, tag_collection, make_map = _SCHEMAS[
+        schema
+    ]
+    merge_seen = False
     missing = _MISSING
     # Where the document began (event index and offset), the collections closed since, and what
     # aliases have been charged so far.
@@ -168,8 +185,21 @@ def _build(  # noqa: C901
                             v = number(v, cap, wide)
                         elif c in word_start or not c:
                             v = keywords.get(v, v)
+                            if v is MERGE:
+                                # Only a key of a mapping merges; anywhere else it is text.
+                                if stack and stack[-1][1][0] == MAP_START and not len(cur) & 1:
+                                    merge_seen = True
+                                else:
+                                    v = "<<"
                 else:
                     v = tagged_scalar(tag, v, cap, wide)
+                    if v is MERGE:  # the tag !!merge
+                        if stack and stack[-1][1][0] == MAP_START and not len(cur) & 1:
+                            merge_seen = True
+                        else:
+                            raise Fail(
+                                "the merge tag is only meaningful on a mapping key", "construct"
+                            )
                 add(v)
                 a = e[4]
                 if a is not None:
@@ -179,10 +209,16 @@ def _build(  # noqa: C901
                 buf = cur
                 cur, e0 = pop()
                 add = cur.append
-                v = _map(buf, e0, e, events, info, wide, intern_key) if k == MAP_END else buf
+                if k == MAP_END:
+                    if merge_seen:
+                        v = _map_merging(buf, e0, e, events, info, wide, intern_key)
+                    else:
+                        v = make_map(buf, e0, e, events, info, wide, intern_key)
+                else:
+                    v = buf
                 tag = e0[4]
                 if tag is not None:
-                    v = _tag_collection(tag, v, k == MAP_END, e0)
+                    v = tag_collection(tag, v, k == MAP_END, e0)
                 add(v)
                 a = e0[3]
                 # An alias means the latest node of that name; one defined inside this node
@@ -200,9 +236,11 @@ def _build(  # noqa: C901
             elif k == ALIAS:
                 v = anchors.get(e[3], missing)
                 if v is _OPEN:
-                    raise Fail(f"the alias {e[3]} refers to a node that contains it", "syntax")
+                    raise Fail(f"alias *{e[3]} refers to a node that contains it", "syntax")
                 if v is missing:
-                    raise Fail(f"the alias {e[3]} has no anchor", "syntax")
+                    raise Fail(f"alias *{e[3]} has no anchor", "syntax")
+                if v is MERGE:
+                    raise Fail("an alias to a merge key cannot be constructed", "construct")
                 ent = info.get(id(v))
                 if ent is None:
                     nodes, size, height = 1, _bytes(v), 0
@@ -210,7 +248,7 @@ def _build(  # noqa: C901
                     nodes, size, height = ent[0], ent[1], ent[2]
                 # The shared object nests as deep as the anchored one, wherever it is used.
                 if depth is not None and len(stack) + height > depth:
-                    raise Fail(f"the alias nests deeper than the limit of {depth}", "limit")
+                    raise Fail(f"alias nests deeper than the limit of {depth}", "limit")
                 # What a copy would hold: loading is cheap because of the sharing, but whoever
                 # walks the result (a dump, a comparison) pays for the expansion.
                 charged_nodes += nodes
@@ -242,7 +280,7 @@ def _build(  # noqa: C901
             buf = cur
             cur, e0 = pop()
             if e0[0] == MAP_START:
-                _map(buf[: len(buf) // 2 * 2], e0, e0, events, info, wide, intern_key)
+                make_map(buf[: len(buf) // 2 * 2], e0, e0, events, info, wide, intern_key)
     except Fail as exc:
         if exc.offset is None:
             exc.offset = _offset(e)
@@ -294,6 +332,8 @@ def _measure(root: Any, info: dict[int, tuple[int, int, int, Any]]) -> tuple[int
             kids = [*obj, *obj.values()]
         elif t is FrozenMapping:
             kids = [*obj._items, *obj._items.values()]
+        elif t is set or t is frozenset:
+            kids = list(obj)
         else:  # Tagged: the tag is no node of its own
             kids = (obj.value,)
         waiting = [c for c in kids if type(c) in _COLLECTIONS and id(c) not in info]
@@ -366,11 +406,13 @@ def _too_deep(events, e0, index: int) -> Fail:
     )
 
 
-def _map_slow(ks, vs, e0, events, info, wide):
+def _map_slow(ks, vs, e0, events, info, wide, strict=True):
     """A mapping with keys that need care: collections to freeze, and equal-looking keys."""
     for i, k in enumerate(ks):
         t = type(k)
-        if t is list or t is dict or (t is Tagged and k._hash is None):
+        if t is set:
+            ks[i] = frozenset(k)
+        elif t is list or t is dict or (t is Tagged and k._hash is None):
             # Aliases were charged when they were read, so the copy is not charged again.
             if _measure(k, info)[2] > KEY_DEPTH:
                 raise Fail(
@@ -388,6 +430,12 @@ def _map_slow(ks, vs, e0, events, info, wide):
             )
     d: dict[Any, Any] = {}
     for i, k in enumerate(ks):
+        if not strict:
+            try:
+                d[k] = vs[i]
+            except RecursionError:
+                raise _too_deep(events, e0, i) from None
+            continue
         try:
             seen = k in d
             if seen:
@@ -432,3 +480,78 @@ def _key_offset(events: list[tuple], e0: tuple, index: int) -> int:
         if kind in (MAP_START, SEQ_START):
             depth += 1
     return e0[1]
+
+
+def _map_last_wins(buf, e0, e_end, events, info, wide, intern_key):
+    """The dict of a mapping where a repeated key keeps its last value (PyYAML's behaviour)."""
+    ks = buf[0::2]
+    vs = buf[1::2]
+    if len(ks) != len(vs):
+        raise Fail("a mapping key has no value", "syntax", e_end[1])
+    try:
+        if {*map(type, ks)} == {str}:
+            ks = list(map(intern_key, ks, ks))
+        return dict(zip(ks, vs, strict=True))
+    except TypeError:
+        pass  # an unhashable key: a collection, frozen below
+    except RecursionError:
+        raise _too_deep(events, e0, 0) from None
+    return _map_slow(ks, vs, e0, events, info, wide, False)
+
+
+def _map_merging(buf, e0, e_end, events, info, wide, intern_key):
+    """A mapping that holds ``<<`` keys: the merged entries come first, the mapping's own
+    entries replace theirs. In a list of mappings the first one wins."""
+    if len(buf) % 2:
+        raise Fail("a mapping key has no value", "syntax", e_end[1])
+    merges: list[dict] = []
+    own: list[Any] = []
+    for i in range(0, len(buf), 2):
+        if buf[i] is not MERGE:
+            own.append(buf[i])
+            own.append(buf[i + 1])
+            continue
+        v = buf[i + 1]
+        found = reversed(v) if type(v) is list else (v,)
+        for m in found:
+            if type(m) is not dict:
+                raise Fail(
+                    "expected a mapping or list of mappings for merging",
+                    "construct",
+                    _key_offset(events, e0, i // 2),
+                )
+            merges.append(m)
+    merged: dict = {}
+    for m in merges:
+        merged.update(m)
+    merged.update(_map_last_wins(own, e0, e_end, events, info, wide, intern_key))
+    # What an alias to this mapping stands for is the mapping as written, merged sources
+    # included: that is what a copy of the text would hold, and what the budget must charge.
+    nodes, size, height = 1, 0, 0
+    for c in buf:
+        if c is MERGE:
+            nodes += 1
+            continue
+        sub = _measure(c, info) if type(c) in _COLLECTIONS else None
+        if sub is None:
+            nodes += 1
+            size += _bytes(c)
+        else:
+            nodes += sub[0]
+            size += sub[1]
+            height = max(height, sub[2])
+    info[id(merged)] = (nodes, size, height + 1, merged)
+    return merged
+
+
+_SCHEMAS = {
+    "core": (KEYWORDS, NUMBER_START, WORD_START, number, tagged_scalar, _tag_collection, _map),
+    "yaml11": (
+        KEYWORDS11, NUMBER_START11, WORD_START11, number11, tagged_scalar11, tag_collection11,
+        _map_last_wins,
+    ),
+    "text": (
+        {}, frozenset(), frozenset(), number, tagged_scalar_text, tag_collection_text,
+        _map_last_wins,
+    ),
+}  # fmt: skip

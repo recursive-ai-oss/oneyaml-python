@@ -45,6 +45,7 @@ def pytest_collection_modifyitems(items):
     if not HAS_NATIVE:
         items[:] = [i for i in items if "native_only" not in i.keywords]
     _mark_native_engine_deviations(items)
+    _mark_pure_documents(items)
 
 
 # ---- the native engine's known deviations ------------------------------------------------------
@@ -138,5 +139,22 @@ def _mark_native_engine_deviations(items):
             item.add_marker(
                 pytest.mark.xfail(
                     strict=True, reason=f"the native engine's known deviation: {case}"
+                )
+            )
+
+
+# The pure backend has no lossless document yet. Strict, so the marks turn into failures (and are
+# deleted) the day it has one.
+def _mark_pure_documents(items):
+    for item in items:
+        spec = getattr(item, "callspec", None)
+        if item.module.__name__.split(".")[-1].startswith("test_document") and (
+            spec is not None and spec.id.startswith("pure")
+        ):
+            item.add_marker(
+                pytest.mark.xfail(
+                    strict=True,
+                    raises=NotImplementedError,
+                    reason="pure document not yet implemented",
                 )
             )

@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 use pyo3::sync::PyOnceLock;
 
 static MAKE_ERROR: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static MAKE_PATCH_ERROR: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static TAGGED: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static FROZEN_MAPPING: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static FREEZE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
@@ -14,6 +15,9 @@ static INT_TEXT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static TAGGED_TAG: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static TAGGED_VALUE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static FROZEN_ITEMS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static CONSTRUCT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static REJECT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static SEXAGESIMAL: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static BIG_INT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 fn lookup<'py>(
@@ -30,6 +34,10 @@ fn lookup<'py>(
 
 pub fn make_error<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
     lookup(py, &MAKE_ERROR, "oneyaml._errors", "make_error")
+}
+
+pub fn make_patch_error<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
+    lookup(py, &MAKE_PATCH_ERROR, "oneyaml._errors", "make_patch_error")
 }
 
 pub fn tagged<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
@@ -79,4 +87,19 @@ fn slot_getter<'py>(
         PyResult::Ok(cls.getattr(name)?.getattr("__get__")?.unbind())
     })?;
     Ok(obj.bind(py))
+}
+
+/// The function that builds the values of the YAML 1.1 mode's tags.
+pub fn construct<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
+    lookup(py, &CONSTRUCT, "oneyaml._yaml11", "construct")
+}
+
+/// The exception that function raises for a value that does not fit its tag.
+pub fn reject<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
+    lookup(py, &REJECT, "oneyaml._yaml11", "Reject")
+}
+
+/// Base-60 integers too long for 64 bits.
+pub fn sexagesimal<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
+    lookup(py, &SEXAGESIMAL, "oneyaml._yaml11", "sexagesimal_int")
 }

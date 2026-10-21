@@ -59,7 +59,9 @@ impl Lim {
                 .max_depth(self.depth)
                 .max_document_size(self.input)
                 .max_scalar_len(self.scalar)
-                .max_documents(self.documents),
+                .max_documents(self.documents)
+                .alias_budget_ratio(self.nodes_factor, self.nodes_floor)
+                .alias_byte_budget_ratio(self.bytes_factor, self.bytes_floor),
         )
     }
 
