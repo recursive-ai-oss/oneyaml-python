@@ -61,6 +61,9 @@ def _norm(token: Any) -> str:
     return str(token)
 
 
+# Types whose values are read without running any code of the caller's.
+_PLAIN = frozenset({str, int, float, bool, type(None)})
+
 _KIDS = dict  # the map type of the books' tree (a test swaps in one that counts lookups)
 
 
@@ -196,11 +199,10 @@ class _Node:
 
     def _view(self, path: tuple) -> Any:
         """The value at ``path``: plain data for a scalar, a view for a collection."""
-        h = self._core.h
-        steps = list(path)
-        kind = h.kind(self._d, steps)
+        # One call: the kind, and the value too when it is a scalar.
+        kind, value = self._core.h.read(self._d, path)
         if kind == "scalar":
-            return h.value(self._d, steps)
+            return value
         cls = MappingView if kind == "mapping" else SequenceView
         return cls(self._core, self._d, path)
 
@@ -217,14 +219,15 @@ class _Node:
                 raise IndexError("sequence index out of range")
         return key
 
-    def _keyed(self, key: Any) -> tuple[str, tuple]:
-        """``(kind, path)`` of the child ``key`` of this node."""
+    def _keyed(self, key: Any) -> tuple[str, tuple, Any]:
+        """``(kind, path, handle)`` of the child ``key`` of this node, the handle having passed
+        the staleness check."""
         kind = self._kind()
         h = self._h()
         if kind == "mapping":
-            return kind, (*self._path, _token(key))
+            return kind, (*self._path, _token(key)), h
         if kind == "sequence":
-            return kind, (*self._path, str(self._index(h, key)))
+            return kind, (*self._path, str(self._index(h, key))), h
         raise TypeError("a scalar has no items")
 
     # -- mapping and sequence protocol, by what the node is
@@ -236,7 +239,7 @@ class _Node:
                 raise TypeError("only a sequence can be sliced")
             return [self[i] for i in range(*key.indices(len(self)))]
         with self._core.lock:
-            _, path = self._keyed(key)
+            path = self._keyed(key)[1]
             return self._view(path)
 
     def __setitem__(self, key: Any, value: Any) -> None:
@@ -244,17 +247,17 @@ class _Node:
             raise TypeError("slice assignment is not supported")
         value = self._prepared(value)
         with self._core.lock:
-            _, path = self._keyed(key)
-            h = self._h()
-            before = h.version()
-            h.set(self._d, list(path), value)
-            if h.version() != before:
+            _, path, h = self._keyed(key)
+            # True when the edit could move or replace a collection, which strands views.
+            if h.set(self._d, path, value):
                 self._core.record(self._d, path)
 
     def _prepared(self, value: Any) -> Any:
         """The value as the backend wants it, converted before the stream lock is taken: reading
         it may run any code of the caller's (a lazy sequence, say), which must never run while
         another thread waits for that lock."""
+        if type(value) in _PLAIN:
+            return value  # a plain scalar runs no code of the caller's to read
         if isinstance(value, _Node):
             value = value.to_python()
         return self._core.h.prepare(value)
@@ -263,9 +266,8 @@ class _Node:
         if isinstance(key, slice):
             raise TypeError("slice deletion is not supported")
         with self._core.lock:
-            kind, path = self._keyed(key)
-            h = self._h()
-            h.remove(self._d, list(path))
+            kind, path, h = self._keyed(key)
+            h.remove(self._d, path)
             if kind == "sequence":
                 self._core.record(self._d, self._path, int(path[-1]))
             self._core.record(self._d, path)
@@ -468,16 +470,27 @@ class Document(_Node):
     ``in``. ``str(doc)``, ``bytes(doc)`` and :meth:`dump` write the whole stream.
     """
 
-    __slots__ = ()
+    __slots__ = ("_root",)
+
+    def __init__(self, core: _Core, d: int, path: tuple) -> None:
+        super().__init__(core, d, path)
+        self._root: tuple[int, str] | None = None
 
     def _kind(self) -> str:
-        h = self._core.h
-        if h.count() <= self._d:
-            return "scalar"
+        # What the root is changes only with an edit that moves the tick (a patch, say), so the
+        # answer is kept for as long as the tick stays. The tick is read first: an edit landing
+        # between the two reads leaves a note that is already out of date.
+        core = self._core
+        tick = core.tick
+        known = self._root
+        if known is not None and known[0] == tick:
+            return known[1]
         try:
-            return h.kind(self._d, [])
-        except KeyError:  # a document with no content at all
-            return "scalar"
+            kind = core.h.kind(self._d, ())
+        except (KeyError, IndexError):  # no such document, or one with no content at all
+            kind = "scalar"
+        self._root = (tick, kind)
+        return kind
 
     def __getattr__(self, name: str) -> Any:
         # `doc.keys()`, `doc.append(x)`: whatever the root is, it answers its own methods.

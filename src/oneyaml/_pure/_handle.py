@@ -108,6 +108,15 @@ class Handle:
         doc, loc = self._find(d, path)
         return T.value_of(doc, loc.row, self._p.limits)
 
+    def read(self, d: int, path: Any) -> tuple[str, Any]:
+        """``(kind, value)``: the value of a scalar, ``None`` for a collection (a view reads it
+        by path). One walk where ``kind`` and ``value`` would make two."""
+        doc, loc = self._find(d, path)
+        k = doc.kind[T.follow(doc, loc.row)]
+        if k in (K_MAP, K_SEQ):
+            return KIND_NAMES[k], None
+        return KIND_NAMES[k], T.value_of(doc, loc.row, self._p.limits)
+
     def length(self, d: int, path: Any) -> int:
         doc, loc = self._find(d, path)
         r = T.follow(doc, loc.row)
@@ -176,8 +185,9 @@ class Handle:
             return value
         return _prepare.prepare(value, self._p.limits)
 
-    def set(self, d: int, path: Any, value: Any) -> None:
-        """Make the node at ``path`` hold ``value`` (a missing mapping key is added)."""
+    def set(self, d: int, path: Any, value: Any) -> bool:
+        """Make the node at ``path`` hold ``value`` (a missing mapping key is added). True when
+        the edit could move or replace a collection (the version moved)."""
         toks = _tokens(path)
         doc = self._doc(d)
         value = self.prepare(value).value
@@ -218,6 +228,8 @@ class Handle:
             raise KeyError("the document is empty")
         if self._edit(doc, work):
             self._version += 1
+            return True
+        return False
 
     def insert(self, d: int, path: Any, index: int, value: Any) -> None:
         """Insert ``value`` before item ``index`` of the sequence at ``path``; an index past
