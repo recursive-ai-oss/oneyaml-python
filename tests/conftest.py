@@ -71,12 +71,15 @@ NATIVE_ENGINE_DEVIATIONS = {
 }
 
 
-# Document tests on which the native engine differs (the pure backend passes them).
+# Document tests on which the native engine differs (the pure backend passes them), keyed by
+# test name and parameter id.
 NATIVE_DOCUMENT_DEVIATIONS = {
-    # The engine refuses these edits as ones that would not read back. Kit cases:
-    # own:edit/set-value-of-a-flow-key-with-an-empty-value and
-    # own:edit/add-key-after-a-block-scalar-ending-in-a-line-of-spaces-with-no-final-line-break
-    "test_edit_writes_the_exact_bytes_pure_first": "the native engine refuses these edits",
+    # The engine refuses this edit as one that would not read back. Kit case:
+    # own:edit/set-value-of-a-flow-key-with-an-empty-value
+    (
+        "test_edit_writes_the_exact_bytes_pure_first",
+        "native-set a flow key that has a colon, a space and no value",
+    ): "the native engine refuses this edit",
 }
 
 _DEVIATION_MODULES = ("test_pure_events", "test_load", "test_load_edges")
@@ -97,8 +100,11 @@ def _native_engine_deviation(item):
 def _mark_native_engine_deviations(items):
     for item in items:
         spec = getattr(item, "callspec", None)
-        why = NATIVE_DOCUMENT_DEVIATIONS.get(item.originalname)
-        if why and spec is not None and spec.id.startswith("native"):
+        if spec is None or not spec.id.startswith("native"):
+            why = None
+        else:
+            why = NATIVE_DOCUMENT_DEVIATIONS.get((item.originalname, spec.id))
+        if why:
             item.add_marker(pytest.mark.xfail(strict=True, reason=why))
         case = _native_engine_deviation(item)
         if case is not None:

@@ -33,7 +33,7 @@ can re-read with the same regular expressions.
 from __future__ import annotations
 
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 
 from .._errors import YAMLError, make_error
@@ -300,20 +300,22 @@ def _block_scalar(s: str, j: int, n: int, pi: int) -> tuple[int, str]:
 def _line_end(s: str, k: int) -> int:
     """The index of the next line break at or after ``k`` (or the end of the text)."""
     a = s.find("\n", k)
-    b = s.find("\r", k)
     if a < 0:
         a = len(s)
-    if b < 0:
-        b = len(s)
-    return min(a, b)
+    # Look for a bare carriage return only up to the line feed: a search of the whole rest of the
+    # text would make a run of short lines quadratic.
+    b = s.find("\r", k, a)
+    return a if b < 0 else b
 
 
 _BOM_LINE = re.compile(r"(?:---|\.\.\.)(?=[ \t\r\n]|$)|[ \t]*(?:#[^\r\n]*)?(?=[\r\n]|$)").match
 _BOM_BEFORE_MARKER = re.compile(
-    r"\ufeff[ \t]*(?:#[^\r\n]*)?(?:\r\n|\r|\n)"
-    r"(?:\ufeff?[ \t]*(?:#[^\r\n]*)?(?:\r\n|\r|\n))*"
-    r"\ufeff?(?:---|\.\.\.)(?=[ \t\r\n]|\Z)"
+    r"\ufeff+[ \t]*(?:#[^\r\n]*)?(?:\r\n|\r|\n)"
+    r"(?:\ufeff*[ \t]*(?:#[^\r\n]*)?(?:\r\n|\r|\n))*"
+    r"\ufeff*(?:---|\.\.\.)(?=[ \t\r\n]|\Z)"
 ).match
+_BREAK = re.compile(r"\r\n|\r|\n")
+_PREFIX_LINE = re.compile(r"\ufeff*[ \t]*(?:#[^\r\n]*)?$").match
 _END_LINE = re.compile(r"\.\.\.(?:[ \t]+#[^\r\n]*|[ \t]*)$").match
 _PROPS_SEQ = re.compile(
     r"[&!][^ \t\r\n]*(?:[ \t]+[&!][^ \t\r\n]*)*[ \t]*(?:#[^\r\n]*)?"
@@ -509,24 +511,58 @@ def _unmask(e: tuple, back: dict[int, str]) -> tuple:
 
 
 def _first_stray_bom(s: str, stop: int) -> int:
-    """The first byte order mark that is not at the start of a document, or ``stop``."""
+    """The first byte order mark that is not at the start of a document, or ``stop``.
+
+    Any number of marks may open a document prefix (a run of them is a run of prefixes), so a
+    mark is judged by where its run starts and what follows the run."""
     pos = s.find("\ufeff")
+    # Text up to here is known to be prefix lines only (blank, comment, mark): the stream start,
+    # or what follows a document end marker.
+    prefix_end = -1
+    starts: list[int] | None = None
     while pos >= 0 and (stop < 0 or pos < stop):
-        ok = False
-        if pos == 0 or s[pos - 1] in "\r\n":
+        start = pos
+        while start > 0 and s[start - 1] == "\ufeff":
+            start -= 1
+        end = pos + 1
+        while s.startswith("\ufeff", end):
+            end += 1
+        ok = in_prefix = False
+        if start == 0:
+            ok = in_prefix = True  # the first prefix of the stream
+        elif s[start - 1] in "\r\n":
             # A mark may begin a document marker line or a comment line; after a document
-            # end marker it may begin anything.
-            ok = bool(_BOM_LINE(s, pos + 1))
-            if not ok and pos > 0:
-                p = pos - 1
-                if s[p] == "\n" and p > 0 and s[p - 1] == "\r":
-                    p -= 1
-                q = max(s.rfind("\n", 0, p), s.rfind("\r", 0, p)) + 1
-                ok = bool(_END_LINE(s, q, p))
+            # end marker, or in a prefix that holds only comments, it may begin anything.
+            if starts is None:
+                starts = [m.end() for m in _BREAK.finditer(s)]
+            in_prefix = _in_prefix(s, start, prefix_end, starts)
+            ok = in_prefix or bool(_BOM_LINE(s, end))
         if not ok:
             return pos
-        pos = s.find("\ufeff", pos + 1)
+        if in_prefix and _BOM_LINE(s, end) and not s.startswith(("---", "..."), end):
+            prefix_end = _BOM_LINE(s, end).end()
+        pos = s.find("\ufeff", end)
     return stop
+
+
+def _in_prefix(s: str, start: int, known: int, starts: list[int]) -> bool:
+    """Whether the lines before ``start`` (a line start) are all prefix lines of one document
+    prefix: back to the stream start or a document end marker, or to text already known to be.
+    ``starts`` holds the index after each line break of ``s``."""
+    p = start
+    i = bisect_left(starts, p)
+    while p > 0:
+        if p <= known:
+            return True
+        q = starts[i - 1] if i > 0 else 0
+        e = p - 2 if p >= 2 and s.startswith("\r\n", p - 2) else p - 1  # without the break
+        if _END_LINE(s, q, e):
+            return True
+        if not _PREFIX_LINE(s, q, e):
+            return False
+        p = q
+        i -= 1
+    return True
 
 
 def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  # noqa: C901
@@ -930,10 +966,13 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
             c = s[j]
             if nl and col == 0 and not tab:
                 if c == "\ufeff":
-                    if _marker_at(s, j + 1):
-                        j += 1
+                    k = j + 1
+                    while k < n and s[k] == "\ufeff":
+                        k += 1
+                    if _marker_at(s, k):
+                        j = k
                         c = s[j]
-                    elif not need and not kinds and _BOM_LINE(s, j + 1):
+                    elif not need and not kinds and _BOM_LINE(s, k):
                         i = _line_end(s, j)  # a comment line in the prefix of the next document
                         continue
                     elif not need and _BOM_BEFORE_MARKER(s, j):
