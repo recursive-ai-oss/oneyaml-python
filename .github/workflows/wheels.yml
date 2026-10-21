@@ -43,8 +43,8 @@ jobs:
           linux_x86='{"name":"linux-x86_64","runner":"ubuntu-latest","kind":"linux","target":"x86_64-unknown-linux-gnu","compat":"manylinux_2_28","image":"quay.io/pypa/manylinux_2_28_x86_64"}'
           all="$linux_x86"
           all+=',{"name":"linux-aarch64","runner":"ubuntu-24.04-arm","kind":"linux","target":"aarch64-unknown-linux-gnu","compat":"manylinux_2_28","image":"quay.io/pypa/manylinux_2_28_aarch64"}'
-          all+=',{"name":"musllinux-x86_64","runner":"ubuntu-latest","kind":"linux","target":"x86_64-unknown-linux-musl","compat":"musllinux_1_2","image":"quay.io/pypa/musllinux_1_2_x86_64"}'
-          all+=',{"name":"musllinux-aarch64","runner":"ubuntu-24.04-arm","kind":"linux","target":"aarch64-unknown-linux-musl","compat":"musllinux_1_2","image":"quay.io/pypa/musllinux_1_2_aarch64"}'
+          all+=',{"name":"musllinux-x86_64","runner":"ubuntu-latest","kind":"linux","target":"x86_64-unknown-linux-musl","compat":"musllinux_1_2","image":"quay.io/pypa/musllinux_1_2_x86_64","container":"quay.io/pypa/musllinux_1_2_x86_64"}'
+          all+=',{"name":"musllinux-aarch64","runner":"ubuntu-24.04-arm","kind":"linux","target":"aarch64-unknown-linux-musl","compat":"musllinux_1_2","image":"quay.io/pypa/musllinux_1_2_aarch64","container":"quay.io/pypa/musllinux_1_2_aarch64"}'
           all+=',{"name":"macos-x86_64","runner":"macos-15-intel","kind":"uv","target":"x86_64-apple-darwin","deployment":"10.13"}'
           all+=',{"name":"macos-arm64","runner":"macos-latest","kind":"uv","target":"aarch64-apple-darwin","deployment":"11.0"}'
           all+=',{"name":"windows-x64","runner":"windows-latest","kind":"uv","target":"x86_64-pc-windows-msvc"}'
@@ -87,6 +87,7 @@ jobs:
           maturin-version: v1.15.0
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.compat }}
+          container: ${{ matrix.container || 'auto' }}
           docker-options: -e RUSTFLAGS
           args: >-
             --release --out dist
@@ -112,14 +113,20 @@ jobs:
           list=""
           for v in $PYTHONS; do list="$list -i $(uv python find "$v")"; done
           echo "args=$list" >> "$GITHUB_OUTPUT"
+      # Keep the workspace and the cargo and rustup directories out of the compiled module.
+      - name: Path prefixes (macOS, Windows)
+        if: matrix.kind == 'uv'
+        run: |
+          home=$("$(uv python find 3.13)" -c 'import os; print(os.path.expanduser("~"))')
+          flags="--remap-path-prefix=$home/.cargo=/cargo --remap-path-prefix=$home/.rustup=/rustup"
+          flags="$flags --remap-path-prefix=$GITHUB_WORKSPACE=/src --remap-path-prefix=$RUNNER_TEMP=/tmp"
+          if [ "$RUNNER_OS" = Windows ]; then
+            flags="$flags -C link-arg=/PDBALTPATH:%_PDB%"
+          fi
+          echo "RUSTFLAGS=$flags" >> "$GITHUB_ENV"
       - name: Build (macOS, Windows)
         if: matrix.kind == 'uv'
         uses: PyO3/maturin-action@3e2bdf6ba6453a61e649744019b8a2d906c7eb38 # v1.51.0
-        env:
-          RUSTFLAGS: >-
-            ${{ runner.os == 'Windows' && '-C link-arg=/PDBALTPATH:%_PDB%' || '' }}
-            --remap-path-prefix=${{ github.workspace }}=/src
-            --remap-path-prefix=${{ runner.temp }}=/tmp
         with:
           maturin-version: v1.15.0
           target: ${{ matrix.target }}
@@ -128,7 +135,7 @@ jobs:
       - name: Check the wheel set
         run: |
           ls -l dist
-          test "$(find dist -name '*-cp*.whl' | wc -l)" = 6
+          test "$(find dist -name '*-cp*.whl' | wc -l | tr -d ' ')" = 6
 
       # ---- Install each wheel in a fresh environment and run the subset.
       - name: Test (linux)
@@ -176,7 +183,7 @@ jobs:
         run: |
           python tools/build_pure.py dist
           ls -l dist
-          test "$(find dist -name '*-py3-none-any.whl' | wc -l)" = 1
+          test "$(find dist -name '*-py3-none-any.whl' | wc -l | tr -d ' ')" = 1
       - name: Test
         run: |
           for v in 3.10 3.13 pypy3.11; do

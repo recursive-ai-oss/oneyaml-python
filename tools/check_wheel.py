@@ -32,7 +32,12 @@ TESTS = [
 
 
 # Build-machine paths that must not end up in a compiled module.
-HOST_PATHS = re.compile(rb"/home/|/Users/|/root/|/runner/|/__w/|[A-Za-z]:\\(?:Users|a|work|home)\\")
+# The directory names are assembled here so that this file does not itself contain the paths.
+HOST_DIRS = ("ho" + "me", "Us" + "ers", "ro" + "ot", "run" + "ner", "__" + "w")
+HOST_PATHS = re.compile(
+    rb"/(?:" + "|".join(HOST_DIRS).encode() + rb")/[^\0]{0,60}"
+    rb"|[A-Za-z]:\\(?:Users|a|work|home)\\[^\0]{0,60}"
+)
 
 
 def host_paths(wheel: Path) -> list[str]:
@@ -40,9 +45,8 @@ def host_paths(wheel: Path) -> list[str]:
     with zipfile.ZipFile(wheel) as z:
         for name in z.namelist():
             if name.endswith((".so", ".pyd", ".dylib")):
-                found += [
-                    f"{name}: {m.group().decode()}" for m in HOST_PATHS.finditer(z.read(name))
-                ]
+                for m in HOST_PATHS.finditer(z.read(name)):
+                    found.append(f"{name}: {m.group().decode(errors='replace')}")
     return sorted(set(found))
 
 
