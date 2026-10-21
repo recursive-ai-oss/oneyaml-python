@@ -731,6 +731,16 @@ def _inline_target(doc: Doc, loc: Loc, slot_kind: str, ind_end: int) -> tuple[in
         else:
             a = st0
             prefix = ""
+            if loc.parent >= 0 and doc.kind[loc.parent] == K_MAP and loc.key >= 0:
+                # A flow mapping key with no value: `b` or `b:` right before a comma. The value
+                # needs its colon (`b:2` would be one plain scalar), and a space after it.
+                if a == doc.en[loc.key]:
+                    prefix = ": "
+                elif text[a - 1 : a] == ":":
+                    if text[a : a + 1] in (" ", "\t"):
+                        a += 1
+                    else:
+                        prefix = " "
         suffix = " " if text[a : a + 1] == "#" else ""
         return a, a, prefix, suffix
     if k in (K_MAP, K_SEQ) and doc.sty[r] == "b" and slot_kind in ("map", "seq"):
@@ -958,12 +968,40 @@ def _put_collection(doc, loc, tv, pr, anchor, row_tag, slot_kind, ind_end, pflow
 # ---- insert ---------------------------------------------------------------------------------
 
 
-def entry_end(doc: Doc, key: int, val: int, key_col: int) -> int:
+def _spaces_of_block_scalar(doc: Doc, last: int, b: int) -> int:
+    """Where the lines of spaces that end the block scalar at row ``last`` stop, from ``b``.
+
+    The scalar's own end leaves out white-space-only lines, but one with more spaces than the
+    content indent is content (`x`, then a line of three spaces under an indent of two, reads
+    as `x` and a line holding one space). Text added after the scalar has to follow it."""
+    ci = block_content_indent(doc, last)
+    if ci is None:
+        return b
+    text = doc.text
+    n = len(text)
+    out = b
+    j = b
+    while j < n:
+        k = line_end(text, j)
+        line = text[j:k]
+        if line.strip(" ") != "":
+            break
+        if len(line) > ci:
+            out = next_line(text, k)
+        j = next_line(text, k)
+    return out
+
+
+def entry_end(doc: Doc, key: int, val: int, key_col: int, after_scalar: bool = False) -> int:
     """The position after the last line of an entry (or item) of a block collection: its value,
     the rest of that line, its break, and comment lines that are indented deeper than the key."""
     text = doc.text
     e = max(node_extent(doc, val), doc.en[key])
     b = e if e > 0 and e > doc.en[val] and text[e - 1] in "\r\n" else next_line(text, e)
+    if after_scalar:
+        tail = val + doc.sz[val] - 1
+        if doc.kind[tail] == K_SCALAR and doc.sty[tail] in "|>" and e == doc.en[tail]:
+            b = _spaces_of_block_scalar(doc, tail, b)
     # deeper comment lines
     while b < len(text):
         m = re.compile(r"([ \t]*)#[^\r\n]*").match(text, b)
@@ -1001,7 +1039,7 @@ def insert_member(doc: Doc, loc: Loc, key: str, value: Any) -> None:
     lk, lv = ents[-1]
     kcol = col(text, entry_start(doc, lk))
     lay = make_layout(doc, p, anc, None)
-    pos = entry_end(doc, lk, lv, kcol)
+    pos = entry_end(doc, lk, lv, kcol, True)
     at_end_no_break = pos >= len(text) and (not text or text[-1] not in "\r\n")
     snippet, fol = new_block(doc, {key: value}, kcol, lay, False, pos, 0 if at_end_no_break else 1)
     if at_end_no_break:
@@ -1075,7 +1113,7 @@ def insert_item(doc: Doc, loc: Loc, index: int | None, value: Any) -> None:
     dcol = col(text, doc.st[p])
     if index == n:
         last = kids[-1]
-        pos = entry_end(doc, last, last, dcol)
+        pos = entry_end(doc, last, last, dcol, True)
         at_end_no_break = pos >= len(text) and (not text or text[-1] not in "\r\n")
         snippet, fol = new_block(doc, [value], dcol, lay, False, pos, 0 if at_end_no_break else 1)
         if at_end_no_break:
@@ -1169,7 +1207,15 @@ def remove_node(doc: Doc, loc: Loc) -> None:
             # an implicit pair becomes an empty mapping
             _replace_pair(doc, pl, p)
             return
+        kcol = None
+        if doc.sty[p] == "b":
+            kcol = col(text, entry_start(doc, lo)) if is_map else col(text, doc.st[p])
+            s0 = entry_start(doc, lo) if is_map else doc.st[p]
+            lead = leading_comments_start(doc, line_start(text, s0), kcol, False)
+            lead_end = line_start(text, s0) if only_blanks_before(text, s0) else lead
         replace_value(doc, pl, empty)
+        if kcol is not None:
+            _drop_entry_comments(doc, p, anc[:-1], kcol, lead, lead_end)
         return
     if doc.sty[p] in "fp":
         _remove_flow(doc, loc, lo, hi, is_map)
@@ -1225,6 +1271,34 @@ def remove_node(doc: Doc, loc: Loc) -> None:
     splice(doc, a, b, "", lo, hi, None, anc, ends)
     if new_st is not None:
         set_start(doc, anc, old_st, new_st)
+
+
+_COMMENT_LINE = re.compile(r"([ \t]*)#[^\r\n]*").match
+
+
+def _drop_entry_comments(
+    doc: Doc, p: int, anc: list[int], key_col: int, lead: int, lead_end: int
+) -> None:
+    """A collection emptied by a removal is now ``{}`` or ``[]`` at row ``p``. The comment lines the
+    removed entry owned go with it: those right above it when the collection is the document's
+    root (``lead:lead_end``), and those below it indented deeper than its key."""
+    text = doc.text
+    q = doc.en[p]
+    if text[q : line_end(text, q)].strip(" \t") == "":
+        j = nxt = next_line(text, q)
+        while j < len(text):
+            m = _COMMENT_LINE(text, j)
+            if m is None or len(m.group(1)) <= key_col:
+                break
+            j = next_line(text, m.end())
+        if j > nxt:
+            # With no final line break in the input, the break before the comment goes too.
+            a = nxt
+            if j >= len(text) and text[-1] not in "\r\n":
+                a = q
+            splice(doc, a, j, "", p + 1, p + 1, None, anc)
+    if lead < lead_end and not anc:
+        splice(doc, lead, lead_end, "", 0, 0, None, [])
 
 
 def _prev_value_row(doc: Doc, p: int, lo: int) -> int:

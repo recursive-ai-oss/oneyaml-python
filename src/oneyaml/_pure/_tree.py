@@ -103,16 +103,17 @@ def _block_end(text: str, st: int, en: int) -> int:
             return e
 
 
-def _blank_end(text: str, end: int) -> int:
-    """Extend a region over the blank lines and indented comment lines after it. A keep block
-    scalar at the end of the document counts the blank lines in its value, and an indented comment
-    belongs to the last entry, so an edit at the end of the document has to see them."""
+def _blank_end(text: str, end: int, comments: bool = True) -> int:
+    """Extend a region over the blank lines and, unless ``comments`` is false, the indented
+    comment lines after it. A keep block scalar at the end of the document counts the blank lines
+    in its value, so an edit there has to see them; at the end of the stream an indented comment
+    belongs to the last entry as well."""
     n = len(text)
     while end < n:
         m = _BREAK.search(text, end)
         stop = m.start() if m else n
         seg = text[end:stop]
-        if seg.strip(" \t") and not (seg[0] in " \t" and seg.lstrip(" \t")[:1] == "#"):
+        if seg.strip(" \t") and not (comments and seg[0] in " \t" and seg.lstrip(" \t")[:1] == "#"):
             break
         if not m:
             return n
@@ -136,6 +137,7 @@ def build(text: str, events: list[tuple]) -> tuple[list[Doc], str]:  # noqa: C90
     counts: list[int] = []
     last_end = 0
     marker_end = 0
+    open_end = False
     kind = ps = st = en = sz = sty = anc = tag = val = None  # type: ignore[assignment]
     for e in events:
         k = e[0]
@@ -200,6 +202,10 @@ def build(text: str, events: list[tuple]) -> tuple[list[Doc], str]:  # noqa: C90
             r = stack.pop()
             counts.pop()
             sz[r] = len(kind) - r
+            if sty[r] == "f" and k == MAP_END and text[e[1] : e[1] + 1] != "}":
+                # A single pair in a flow sequence whose key is a flow collection (`[a]: 1`)
+                # starts with a bracket too; only a real mapping ends with a brace.
+                sty[r] = "p"
             if sty[r] == "f":
                 j = e[1]
                 if text[j : j + 1] in ("]", "}") and text[j : j + 1] != "":
@@ -243,13 +249,21 @@ def build(text: str, events: list[tuple]) -> tuple[list[Doc], str]:  # noqa: C90
             last_end = e[2]
         elif k == DOC_END:
             end = _region_end(text, max(e[2] if e[3] else e[1], last_end, marker_end))
-            if not e[3]:
-                end = _blank_end(text, end)
+            # Comment lines before the next document's marker belong to that document's header
+            # whatever their indent; only a document that runs to the end of the stream owns
+            # the indented comments after its last entry (extended after the loop).
+            open_end = not e[3]
+            if open_end:
+                end = _blank_end(text, end, False)
             d.text = text[b:end]  # type: ignore[union-attr]
             docs.append(d)  # type: ignore[arg-type]
             prev_end = end
     if not docs:
         return docs, text
+    if open_end:
+        end = _blank_end(text, prev_end)
+        docs[-1].text += text[prev_end:end]
+        prev_end = end
     if prev_end < len(text):
         docs[-1].text += text[prev_end:]
     return docs, ""

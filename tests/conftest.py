@@ -72,7 +72,12 @@ NATIVE_ENGINE_DEVIATIONS = {
 
 
 # Document tests on which the native engine differs (the pure backend passes them).
-NATIVE_DOCUMENT_DEVIATIONS = {}
+NATIVE_DOCUMENT_DEVIATIONS = {
+    # The engine refuses these edits as ones that would not read back. Kit cases:
+    # own:edit/set-value-of-a-flow-key-with-an-empty-value and
+    # own:edit/add-key-after-a-block-scalar-ending-in-a-line-of-spaces-with-no-final-line-break
+    "test_edit_writes_the_exact_bytes_pure_first": "the native engine refuses these edits",
+}
 
 _DEVIATION_MODULES = ("test_pure_events", "test_load", "test_load_edges")
 
@@ -83,6 +88,8 @@ def _native_engine_deviation(item):
         return None
     if spec is not None and not spec.id.startswith("native"):
         return None
+    if spec is None and not HAS_NATIVE:
+        return None  # a test over both backends has nothing to deviate from
     text = spec.params.get("text") if spec is not None else None
     return NATIVE_ENGINE_DEVIATIONS.get((item.originalname, text))
 

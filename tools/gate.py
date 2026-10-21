@@ -21,6 +21,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+# More workers than this gain little and multiply peak memory (each worker imports the whole
+# suite), which matters when the gate runs under a memory cap.
+WORKERS = str(min(os.cpu_count() or 1, 16))
+
+
 def main() -> int:
     work = os.environ.get("GATE_WORK")
     if not work:
@@ -49,7 +54,7 @@ def main() -> int:
         e = dict(env)
         if backend:
             e["ONEYAML_BACKEND"] = backend
-        return lambda: run([py, "-m", "pytest", "-q", "-n", "auto", "-p", "no:cacheprovider"], e)
+        return lambda: run([py, "-m", "pytest", "-q", "-n", WORKERS, "-p", "no:cacheprovider"], e)
 
     def run(cmd, e=env, cwd=ROOT):
         return subprocess.run(cmd, env=e, cwd=cwd).returncode == 0

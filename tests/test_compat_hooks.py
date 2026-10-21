@@ -19,7 +19,7 @@ import pytest
 import oneyaml.compat.pyyaml as cy
 from hook_corpus import PROGRAMS, SUBCLASS_PROGRAMS, tagged_documents
 from oneyaml import _api
-from test_compat_pyyaml import KIT, outcome, same
+from test_compat_pyyaml import KIT, outcome, pyyaml_loader, same
 
 yaml = pytest.importorskip("yaml")
 
@@ -204,7 +204,7 @@ def test_registration_scoping_matches_pyyaml():
         out = {}
         for name in names:
             try:
-                out[name] = module.load(f"{tag} v", getattr(module, name))
+                out[name] = module.load(f"{tag} v", pyyaml_loader(name, module))
             except module.YAMLError:
                 out[name] = "error"
         return out
@@ -215,7 +215,7 @@ def test_registration_scoping_matches_pyyaml():
     cases = {
         "-load": lambda m, t: m.add_constructor(t, hit),
         "-safe": lambda m, t: m.add_constructor(t, hit, Loader=m.SafeLoader),
-        "-csafe": lambda m, t: m.add_constructor(t, hit, Loader=m.CSafeLoader),
+        "-csafe": lambda m, t: m.add_constructor(t, hit, Loader=pyyaml_loader("CSafeLoader", m)),
         "-full": lambda m, t: m.FullLoader.add_constructor(t, hit),
         "-safe-cls": lambda m, t: m.SafeLoader.add_constructor(t, hit),
         "-safeconstructor": lambda m, t: m.constructor.SafeConstructor.add_constructor(t, hit),

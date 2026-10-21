@@ -65,6 +65,24 @@ def ours(text, loader=None):
     return list(cy.load_all(text, loader or cy.SafeLoader))
 
 
+_STAND_INS = {}
+
+
+def pyyaml_loader(name, module=None):
+    """PyYAML's loader called ``name``; for a C loader the install lacks, a class built from the
+    same parts as its pure counterpart. The C loaders differ only in the scanner and parser, so
+    their constructor tables and the scoping of registrations behave alike."""
+    module = module or yaml
+    found = getattr(module, name, None)
+    if found is not None:
+        return found
+    key = (module, name)
+    if key not in _STAND_INS:
+        pure = getattr(module, name[1:])
+        _STAND_INS[key] = type(name, pure.__bases__, {"__init__": pure.__init__})
+    return _STAND_INS[key]
+
+
 def theirs(text, loader=None):
     return list(yaml.load_all(text, loader or yaml.SafeLoader))
 
@@ -676,7 +694,7 @@ INLINE = [
 
 @pytest.mark.parametrize("text", INLINE)
 def test_inline_documents_match_pyyaml(api, text):
-    for loader in (yaml.SafeLoader, yaml.CSafeLoader):
+    for loader in (yaml.SafeLoader, pyyaml_loader("CSafeLoader")):
         ref = outcome(lambda t, loader=loader: theirs(t, loader), text, yaml.YAMLError)
         got = outcome(ours, text, cy.YAMLError)
         assert ref[0] == got[0] == "ok", (ref, got)

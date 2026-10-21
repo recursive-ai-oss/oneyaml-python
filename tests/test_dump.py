@@ -259,6 +259,24 @@ def test_integer_beyond_the_conversion_cap(d):
         sys.set_int_max_str_digits(old)
 
 
+def test_long_integer_text_needs_no_big_conversion():
+    from oneyaml._types import int_text
+
+    old = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(0)
+    try:
+        big = random.Random(3).getrandbits(60000)
+        values = [0, 1, -7, 10**639, 10**640, 10**5000 - 1, -(7**9000), big]
+        expected = [str(v) for v in values]
+    finally:
+        sys.set_int_max_str_digits(old)
+    sys.set_int_max_str_digits(640)
+    try:
+        assert [int_text(v) for v in values] == expected
+    finally:
+        sys.set_int_max_str_digits(old)
+
+
 def test_subclasses_write_as_what_they_extend(d):
     import collections
     import enum
@@ -774,6 +792,11 @@ def _in_a_memory_limited_process(backend, extra, limit_mb):
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs /proc and RLIMIT_AS")
+@pytest.mark.skipif(
+    sys.implementation.name == "pypy",
+    reason="PyPy aborts the process when its allocator cannot get memory, instead of "
+    "raising MemoryError, so there is nothing for the library to catch",
+)
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("limit_mb", [40, 150, 400])
 def test_running_out_of_memory_is_a_memory_error(backend, limit_mb):

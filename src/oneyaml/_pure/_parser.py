@@ -1138,8 +1138,6 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
                 # ---- a scalar, alias or flow collection, possibly an implicit key
                 multi = False
                 if c == "[" or c == "{":
-                    if mk:
-                        raise fail(j, "a mapping key is expected")
                     ev_idx = len(ev)
                     fstart = j
                     e = flow(j, gstart, anchor, tag, pi + 1, len(kinds))
@@ -1160,21 +1158,27 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
                             ma, mt, ka, kt, kps, kcol = anchor, tag, None, None, j, col
                         else:
                             ma, mt, ka, kt, kps, kcol = None, None, anchor, tag, pstart, gcol
-                        if mk:
-                            raise fail(j, "a mapping key is expected")
                         ev[ev_idx] = (ev[ev_idx][0], kps, j, ka, kt, True)
-                        if len(kinds) >= max_depth:
-                            raise fail(j, "nesting is too deep", "limit")
-                        ev.insert(ev_idx, (MAP_START, pstart, kps, ma, mt, False))
-                        kinds.append(1)
-                        inds.append(kcol)
-                        sts.append(0)
+                        if mk:
+                            # The next entry of the open mapping, as for a scalar key.
+                            if props_nl or not (kinds and kinds[-1] == 1 and inds[-1] == kcol):
+                                raise fail(j, "a mapping key is expected")
+                        else:
+                            if len(kinds) >= max_depth:
+                                raise fail(j, "nesting is too deep", "limit")
+                            ev.insert(ev_idx, (MAP_START, pstart, kps, ma, mt, False))
+                            kinds.append(1)
+                            inds.append(kcol)
+                            sts.append(0)
+                        mk = False
                         last_end = e
                         i = k + 1
                         pi = kcol
                         inline_ok = False
                         same_ok = True
                         continue
+                    if mk:
+                        raise fail(j, "a mapping key is expected")
                     if two:
                         ma, mt = _merge(s, oa, ot, anchor, tag, gstart)
                         ev[ev_idx] = (ev[ev_idx][0], pstart, fstart, ma, mt, True)
