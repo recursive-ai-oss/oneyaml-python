@@ -16,6 +16,7 @@ crate-type = ["cdylib"]
 pyo3 = { version = "0.30", features = ["extension-module"] }
 # The parsing engine.
 oneyaml = { git = "https://github.com/recursive-ai-oss/oneyaml-rust", rev = "93e9e30f99c60d583f195dad1b4e9b51b37ddc1e" } # pinned engine revision
+oneyaml-syntax = { git = "https://github.com/recursive-ai-oss/oneyaml-rust", rev = "93e9e30f99c60d583f195dad1b4e9b51b37ddc1e" } # event stream, same revision
 
 [profile.dev]
 # Fast to build and fast enough to test: our crate lightly optimised,
