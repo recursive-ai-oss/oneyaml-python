@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .._errors import YAMLError
+from . import _emit
 from ._construct import load
 from ._decode import decode
 from ._emit import dump
@@ -36,3 +37,11 @@ def events_text(data: bytes | str, max_depth: int = DEFAULT_MAX_DEPTH) -> list[s
         exc.events = render(raw) if raw is not None else []
         raise
     return render(events)
+
+
+def _dump_path_ops(reset: bool) -> int:
+    """Operations on the dump's on-path set since the last reset (a test reads it)."""
+    n = _emit.PATH_OPS
+    if reset:
+        _emit.PATH_OPS = 0
+    return n

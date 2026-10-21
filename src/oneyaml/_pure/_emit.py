@@ -25,7 +25,7 @@ from typing import Any
 from .._errors import LimitError
 from .._types import FrozenMapping, Tagged, int_text
 
-__all__ = ["MAX_DEPTH", "dump"]
+__all__ = ["MAX_DEPTH", "PATH_OPS", "dump"]
 
 # Nesting of collections that is written. Output of a mapping chain grows with the square of
 # its depth, and the reader's default depth limit is the same number.
@@ -61,6 +61,18 @@ _TAG_SAFE = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-#;/?:@&=+$_.~*'()"
 )
 _YAML_TAG = "tag:yaml.org,2002:"
+# From this depth the containers on the current path are tracked, to refuse a value that
+# contains itself. Shallower values, which are nearly all of them, pay nothing.
+_TRACK_FROM = 64
+_END = object()
+# Reads of the stored slots of a Tagged and a FrozenMapping: not affected by what a subclass
+# does with attribute lookup.
+_TAG_GET = Tagged.tag.__get__
+_VALUE_GET = Tagged.value.__get__
+_ITEMS_GET = FrozenMapping._items.__get__
+_LONE_SURROGATE = "a string holds a lone surrogate, which YAML cannot represent"
+# Operations on the on-path set, counted so a test can check the work is linear.
+PATH_OPS = 0
 
 
 def _escape_one(m: re.Match) -> str:
@@ -98,7 +110,7 @@ def _string(s: str, flow: bool, cpad: str | None) -> str:
         return "''"
     if _NEEDS_ESCAPE(s):
         if _SURROGATE(s):
-            raise ValueError("a string holds a lone surrogate, which YAML cannot represent")
+            raise ValueError(_LONE_SURROGATE)
         return _double(s)
     if "\n" in s:
         if cpad is None or s[0] in " \t\n" or s[-1] in " \t" or _SPACE_BEFORE_NEWLINE(s):
@@ -145,8 +157,11 @@ def _int(v: int) -> str:
 
 
 def _tag(tag: Any) -> str:
-    if not isinstance(tag, str):
+    if not issubclass(type(tag), str):
         raise TypeError(f"a tag must be a str, not {type(tag).__name__}")
+    tag = str.__str__(tag)
+    if _SURROGATE(tag):
+        raise ValueError(_LONE_SURROGATE)
     if not tag:
         raise ValueError("a tag cannot be empty")
     shorthand = tag.startswith(_YAML_TAG) and len(tag) > len(_YAML_TAG)
@@ -192,18 +207,46 @@ def _unsupported(v: Any) -> TypeError:
     return TypeError(f"Object of type {type(v).__name__} is not YAML serializable")
 
 
-def _tagged(v: Tagged, flow: bool, cpad: str | None) -> Any:
-    tag = _tag(v.tag)
-    inner = v.value
-    if isinstance(inner, (Tagged, bytes, bytearray)):
+_BYTES_LIKE = (bytes, bytearray, memoryview)
+
+
+def _tagged(v: Any, flow: bool, cpad: str | None) -> Any:
+    """A value whose real type is a Tagged. Its content is read as a plain node: tags do not
+    nest, and nothing here recurses."""
+    tag = _tag(_TAG_GET(v))
+    inner = _VALUE_GET(v)
+    t = type(inner)
+    if issubclass(t, Tagged) or issubclass(t, _BYTES_LIKE):
         raise ValueError("a node cannot carry two tags")
-    n = _node(inner, flow, cpad)
+    n = _plain(inner, flow, cpad)
     return tag + " " + n if type(n) is str else (n[0], n[1], tag)
 
 
 def _node(v: Any, flow: bool, cpad: str | None) -> Any:
     """``v`` as scalar text, or ``(kind, obj, tag)`` for a collection: ``obj`` is a dict or a
     sequence, ``tag`` the tag text or None."""
+    t = type(v)
+    if t is str:
+        return _string(v, flow, cpad)
+    if t is int:
+        return _int(v)
+    if t is dict:
+        return (_MAP, v, None)
+    if t is list or t is tuple:
+        return (_SEQ, v, None)
+    if v is None:
+        return "null"
+    if t is bool:
+        return "true" if v else "false"
+    if t is float:
+        return _float(v)
+    # Whether it is a Tagged is decided here, from the real type, once.
+    if t is Tagged or issubclass(t, Tagged):
+        return _tagged(v, flow, cpad)
+    return _plain(v, flow, cpad)
+
+
+def _plain(v: Any, flow: bool, cpad: str | None) -> Any:
     t = type(v)
     if v is None:
         return "null"
@@ -219,43 +262,64 @@ def _node(v: Any, flow: bool, cpad: str | None) -> Any:
         return (_MAP, v, None)
     if t is list or t is tuple:
         return (_SEQ, v, None)
-    if t is Tagged:
-        return _tagged(v, flow, cpad)
-    if t is bytes or t is bytearray:
-        return _binary(bytes(v), cpad)
+    if t is bytes:
+        return _binary(v, cpad)
     if t is FrozenMapping:
-        return (_MAP, v._items, None)
-    # Subclasses behave as what they extend, as in the json module.
-    if isinstance(v, Tagged):
-        return _tagged(v, flow, cpad)
-    if isinstance(v, str):
+        return (_MAP, _ITEMS_GET(v), None)
+    # Subclasses are read as their base type's data, never through overridden methods, as in
+    # the native backend.
+    if issubclass(t, str):
         return _string(str.__str__(v), flow, cpad)
-    if isinstance(v, int):
+    if issubclass(t, int):
         return _int(v)
-    if isinstance(v, float):
+    if issubclass(t, float):
         return _float(float.__float__(v))
-    if isinstance(v, dict):
+    if issubclass(t, dict):
         return (_MAP, v, None)
-    if isinstance(v, (list, tuple)):
+    if issubclass(t, (list, tuple)):
         return (_SEQ, v, None)
-    if isinstance(v, FrozenMapping):
-        return (_MAP, v._items, None)
-    if isinstance(v, (bytes, bytearray)):
-        return _binary(bytes(v), cpad)
+    if issubclass(t, FrozenMapping):
+        return (_MAP, _ITEMS_GET(v), None)
+    if issubclass(t, _BYTES_LIKE):
+        # Through the buffer protocol: the raw bytes, whatever the object's own methods say.
+        return _binary(memoryview(v).tobytes(), cpad)
     raise _unsupported(v)
 
 
-def _check_path(frames: list, obj: Any) -> None:
+def _push(frames: list, path: set, frame: list) -> None:
+    """Open a frame: check the depth, and the path once it is deep enough to be worth tracking."""
+    global PATH_OPS
     depth = len(frames) + 1
     if depth > MAX_DEPTH:
         raise LimitError(f"the value nests deeper than {MAX_DEPTH} levels", category="limit")
-    # A value that contains itself would nest until the limit; look for it now and then,
-    # at depths that double, so the check costs no more than the walk.
-    if depth >= 64 and depth & (depth - 1) == 0:
-        ids = [id(f[5]) for f in frames if f[5] is not None]
-        ids.append(id(obj))
-        if len(set(ids)) != len(ids):
-            raise ValueError("Circular reference detected")
+    if depth >= _TRACK_FROM:
+        if depth == _TRACK_FROM:
+            # The path so far was not tracked: take it in now.
+            path.clear()
+            for f in frames:
+                o = f[5]
+                if o is not None:
+                    PATH_OPS += 1
+                    if id(o) in path:
+                        raise ValueError("Circular reference detected")
+                    path.add(id(o))
+        o = frame[5]
+        if o is not None:
+            PATH_OPS += 1
+            if id(o) in path:
+                raise ValueError("Circular reference detected")
+            path.add(id(o))
+    frames.append(frame)
+
+
+def _pop(frames: list, path: set) -> None:
+    global PATH_OPS
+    if len(frames) >= _TRACK_FROM:
+        o = frames[-1][5]
+        if o is not None:
+            PATH_OPS += 1
+            path.discard(id(o))
+    frames.pop()
 
 
 def _empty(kind: int, tag: str | None) -> str:
@@ -263,34 +327,45 @@ def _empty(kind: int, tag: str | None) -> str:
     return f"{tag} {text}" if tag else text
 
 
-def _open(c, out, head, keyed, col, indent, frames):
+def _frame(kind: int, obj: Any, col: int, inline: bool) -> list | None:
+    """The frame for a collection's entries, or None when it has none. A dict, list or tuple
+    is empty by its own length; a subclass by its first entry, since its ``__len__`` may say
+    anything."""
+    t = type(obj)
+    it = iter(obj.items()) if kind == _MAP else iter(obj)
+    if not (t is dict or t is list or t is tuple):
+        first = next(it, _END)
+        if first is _END:
+            return None
+        it = chain((first,), it)
+    elif not len(obj):
+        return None
+    # Frame: kind, iterator, padding of its lines, column, whether its first line is already
+    # started, the container (kept alive while open; its identity is checked on the path).
+    return [kind, it, " " * col, col, inline, obj]
+
+
+def _open(c, out, head, keyed, col, indent):
     """Start a collection after ``head`` (the text already on the line: ``key:``, ``-``,
     ``?``). Returns the new frame, or None for an empty collection (written whole)."""
     kind, obj, tag = c
-    if not len(obj):
-        out.append(f"{head} {_empty(kind, tag)}\n")
-        return None
-    _check_path(frames, obj)
     if keyed:
-        if tag:
-            out.append(f"{head} {tag}\n")
-            ncol = col + indent
-        else:
-            out.append(head + "\n")
-            ncol = col + indent if kind == _MAP else col
+        ncol = col + indent if tag or kind == _MAP else col
         inline = False
     else:
         ncol = col + 2
-        if tag:
-            out.append(f"{head} {tag}\n")
-            inline = False
-        else:
-            out.append(head + " ")
-            inline = True
-    it = iter(obj.items()) if kind == _MAP else iter(obj)
-    # Frame: kind, iterator, padding of its lines, column, whether its first line is already
-    # started, the container (for the cycle check).
-    return [kind, it, " " * ncol, ncol, inline, obj]
+        inline = not tag
+    frame = _frame(kind, obj, ncol, inline)
+    if frame is None:
+        out.append(f"{head} {_empty(kind, tag)}\n")
+        return None
+    if tag:
+        out.append(f"{head} {tag}\n")
+    elif keyed:
+        out.append(head + "\n")
+    else:
+        out.append(head + " ")
+    return frame
 
 
 def _block(root: Any, out: list, indent: int) -> None:
@@ -300,14 +375,15 @@ def _block(root: Any, out: list, indent: int) -> None:
         out.append(c + "\n")
         return
     kind, obj, tag = c
-    if not len(obj):
+    root_frame = _frame(kind, obj, 0, True)
+    if root_frame is None:
         out.append(_empty(kind, tag) + "\n")
         return
-    frames: list = []
-    _check_path(frames, obj)
     if tag:
         out.append(tag + "\n")
-    frames.append([kind, iter(obj.items()) if kind == _MAP else iter(obj), "", 0, True, obj])
+    frames: list = []
+    path: set = set()
+    _push(frames, path, root_frame)
     kcache: dict = {}
     while frames:
         cur = frames[-1]
@@ -346,7 +422,7 @@ def _block(root: Any, out: list, indent: int) -> None:
                     out.append(f"{lead}{kt}: {n}\n")
                     lead = pad
                     continue
-                descend = _open(n, out, f"{lead}{kt}:", True, col, indent, frames)
+                descend = _open(n, out, f"{lead}{kt}:", True, col, indent)
                 lead = pad
                 if descend is not None:
                     break
@@ -361,7 +437,7 @@ def _block(root: Any, out: list, indent: int) -> None:
                     out.append(f"{lead}- {n}\n")
                     lead = pad
                     continue
-                descend = _open(n, out, f"{lead}-", False, col, indent, frames)
+                descend = _open(n, out, f"{lead}-", False, col, indent)
                 lead = pad
                 if descend is not None:
                     break
@@ -372,15 +448,22 @@ def _block(root: Any, out: list, indent: int) -> None:
                     out.append(f"{lead}{pfx} {n}\n")
                     lead = pad
                     continue
-                descend = _open(n, out, f"{lead}{pfx}", False, col, indent, frames)
+                descend = _open(n, out, f"{lead}{pfx}", False, col, indent)
                 lead = pad
                 if descend is not None:
                     break
         if descend is not None:
             cur[4] = False  # the line it started is finished
-            frames.append(descend)
+            _push(frames, path, descend)
         else:
-            frames.pop()
+            _pop(frames, path)
+
+
+def _flat(it):
+    """A mapping's entries as a flat run of keys and values; each entry unpacks as ``k, v``."""
+    for k, v in it:
+        yield k
+        yield v
 
 
 def _flow(root: Any, out: list) -> None:
@@ -391,30 +474,34 @@ def _flow(root: Any, out: list) -> None:
         return
     parts: list = []
     frames: list = []
+    path: set = set()
 
     def begin(c):
         kind, obj, tag = c
-        if not len(obj):
+        frame = _frame(kind, obj, 0, False)
+        if frame is None:
             parts.append(_empty(kind, tag))
             return None
-        _check_path(frames, obj)
+        if kind == _MAP:
+            frame[1] = _flat(frame[1])
         if tag:
             parts.append(tag + " ")
         parts.append("{" if kind == _MAP else "[")
-        it = chain.from_iterable(obj.items()) if kind == _MAP else iter(obj)
-        return [kind, it, 0, 0, False, obj]
+        return frame
 
     first = begin(c)
     if first is None:
         out.append(parts[0] + "\n")
         return
-    frames.append(first)
+    _push(frames, path, first)
+    # Per frame, the items written so far: between entries ", ", between a key and its value ": ".
+    counts = [0]
     while frames:
         cur = frames[-1]
-        kind, it, n = cur[0], cur[1], cur[2]
+        kind, it = cur[0], cur[1]
+        n = counts[-1]
         descend = None
         for v in it:
-            # Between entries ", "; between a key and its value ": ".
             if n:
                 parts.append(", " if kind == _SEQ or not n & 1 else ": ")
             n += 1
@@ -425,11 +512,13 @@ def _flow(root: Any, out: list) -> None:
             descend = begin(c)
             if descend is not None:
                 break
-        cur[2] = n
+        counts[-1] = n
         if descend is not None:
-            frames.append(descend)
+            _push(frames, path, descend)
+            counts.append(0)
         else:
-            frames.pop()
+            _pop(frames, path)
+            counts.pop()
             parts.append("}" if kind == _MAP else "]")
     parts.append("\n")
     out.append("".join(parts))
@@ -441,6 +530,10 @@ def dump(objs: list, opts: tuple, multi: bool) -> str:
     ``multi`` only tells a stream of documents from one; the text is the same.
     """
     indent, flow, start = opts
+    if type(indent) is not int:
+        raise TypeError("indent must be an int")
+    if not 1 <= indent <= 16:
+        raise ValueError("indent must be between 1 and 16")
     out: list = []
     for i, obj in enumerate(objs):
         if i or start:

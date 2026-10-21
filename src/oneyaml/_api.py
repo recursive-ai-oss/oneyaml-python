@@ -99,7 +99,10 @@ def dumps(obj: Any, *, indent: int = 2, flow: bool = False, explicit_start: bool
     ``str``, ``list`` and ``tuple`` (sequences), ``dict`` and ``FrozenMapping`` (mappings, in
     insertion order), ``bytes`` (``!!binary``) and ``Tagged`` are written; a tuple or a
     ``FrozenMapping`` as a mapping key becomes a complex key. Any other type is a
-    ``TypeError``. Layout only changes with the options:
+    ``TypeError``. Subclasses are written as the type they extend, from its own data and never
+    through methods they override (a ``str`` subclass as its text, ``bytes``, ``bytearray`` and
+    ``memoryview`` as their raw bytes, a mapping's ``items()`` entries unpacked as
+    ``key, value = entry`` does). Layout only changes with the options:
 
     Args:
         indent: spaces per nesting level in block style, 1 to 16.
@@ -111,6 +114,11 @@ def dumps(obj: Any, *, indent: int = 2, flow: bool = False, explicit_start: bool
         ValueError: a value that contains itself, a string with a lone surrogate, a tag that
             cannot be written, or an option out of range.
         LimitError: the value nests more than 10,000 levels.
+        MemoryError: the text does not fit in memory.
+        RuntimeError: a dict changed size while it was being written.
+
+    Exceptions raised by the value's own code (an ``items`` or ``__iter__`` of a subclass, say)
+    reach the caller unchanged, as with ``json.dumps``.
     """
     return _impl.dump([obj], _options(indent, flow, explicit_start), False)
 

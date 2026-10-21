@@ -48,11 +48,18 @@ fn load<'py>(
 fn dump<'py>(
     py: Python<'py>,
     objs: &Bound<'py, pyo3::types::PyList>,
-    opts: (usize, bool, bool),
+    opts: &Bound<'py, PyAny>,
     multi: bool,
 ) -> PyResult<Bound<'py, pyo3::types::PyString>> {
     let _ = multi;
     guarded(py, || writer::dump(py, objs, opts))
+}
+
+/// Operations on the dump's on-path set since the last reset (a test reads it to check that
+/// the work is linear in the size of the value).
+#[pyfunction]
+fn _dump_path_ops(reset: bool) -> usize {
+    writer::path_ops(reset)
 }
 
 /// The event stream as yaml-test-suite notation lines.
@@ -94,6 +101,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(probe, m)?)?;
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_function(wrap_pyfunction!(dump, m)?)?;
+    m.add_function(wrap_pyfunction!(_dump_path_ops, m)?)?;
     m.add_function(wrap_pyfunction!(events_text, m)?)?;
     m.add_function(wrap_pyfunction!(_parse_only, m)?)?;
     m.add_function(wrap_pyfunction!(_panic_probe, m)?)?;

@@ -4,7 +4,11 @@ import io
 import math
 import os
 import random
+import struct
+import subprocess
 import sys
+import textwrap
+import threading
 
 import pytest
 
@@ -330,7 +334,7 @@ def test_depth_without_recursion(d):
     assert text.startswith("- - - - ")
     assert d.loads(text, limits=oneyaml.Limits.none()) is not None
     text = d.dumps(deep, flow=True)
-    assert text == "[" * 9000 + "[" + "]" * 9000 + "]\n" or text.count("[") == 9000
+    assert text == "[" * 9001 + "]" * 9001 + "\n"
     deep_map = {}
     node = deep_map
     for _ in range(3000):
@@ -545,3 +549,461 @@ def test_backends_raise_the_same_errors():
                     mod.dump([value], (2, flow, False), False)
                 errs.append(type(info.value))
             assert errs[0] is errs[1], (value, errs)
+
+
+# ---- what is read of an object, and what happens when the object misbehaves --------------------
+
+
+def _both(value, **kw):
+    """The text each backend writes for ``value``, or the type of what it raises."""
+    out = []
+    for mod in (_native, _pure) if HAS_NATIVE else (_pure,):
+        try:
+            out.append(mod.dump([value], (2, kw.get("flow", False), False), False))
+        except Exception as exc:
+            out.append(type(exc))
+    return out
+
+
+def test_mutating_a_dict_while_it_is_written_is_a_runtime_error(d):
+    def grows_when_asked_for_items(flow):
+        outer = {}
+
+        class D(dict):
+            def items(self):
+                outer[f"x{len(outer)}"] = 1
+                return super().items()
+
+        outer["a"] = D(b=1)
+        outer["c"] = 2
+        with pytest.raises(RuntimeError, match="changed size"):
+            d.dumps(outer, flow=flow)
+
+    grows_when_asked_for_items(False)
+    grows_when_asked_for_items(True)
+
+
+@pytest.mark.parametrize("kind", ["dict", "list"])
+@pytest.mark.parametrize("flow", [False, True])
+def test_a_value_changed_by_other_threads_ends_in_a_runtime_error_or_a_text(d, kind, flow):
+    shared_d = {f"k{i}": [i, "x"] for i in range(500)}
+    shared_l = [{"a": i} for i in range(500)]
+    stop = threading.Event()
+
+    def mutate():
+        i = 0
+        while not stop.is_set():
+            i += 1
+            if kind == "dict":
+                shared_d[f"n{i % 50}"] = i
+                shared_d.pop(f"n{(i + 25) % 50}", None)
+            else:
+                shared_l.append({"b": i})
+                if len(shared_l) > 300:
+                    del shared_l[-200:]
+
+    threads = [threading.Thread(target=mutate) for _ in range(2)]
+    for t in threads:
+        t.start()
+    seen = set()
+    try:
+        for _ in range(150):
+            try:
+                d.dumps(shared_d if kind == "dict" else shared_l, flow=flow)
+                seen.add("ok")
+            except RuntimeError:
+                seen.add("RuntimeError")
+    finally:
+        stop.set()
+        for t in threads:
+            t.join()
+    # Any other exception would have escaped the loop above.
+    assert seen <= {"ok", "RuntimeError"}
+    if kind == "list":
+        assert seen == {"ok"}
+
+
+def test_exceptions_from_the_values_own_code_propagate(d):
+    class Boom(Exception):
+        pass
+
+    class D(dict):
+        def items(self):
+            raise Boom
+
+    class L(list):
+        def __iter__(self):
+            raise Boom
+
+    for value in (D(a=1), L([1]), {"k": D(a=1)}, [L([1])]):
+        for flow in (False, True):
+            with pytest.raises(Boom):
+                d.dumps(value, flow=flow)
+
+
+def test_the_user_has_no_say_in_what_is_a_tagged(d):
+    # An object that answers differently every time it is asked what its class is.
+    class Sneaky:
+        calls = 0
+
+        @property
+        def __class__(self):
+            Sneaky.calls += 1
+            return Tagged if Sneaky.calls % 2 == 0 else Sneaky
+
+        tag = "!t"
+        value = "leaf"
+
+    for flow in (False, True):
+        for value in (Sneaky(), [Sneaky()], {"k": Sneaky()}):
+            with pytest.raises(TypeError, match="not YAML serializable"):
+                d.dumps(value, flow=flow)
+
+    class Sub(Tagged):
+        __slots__ = ()
+
+        def __getattribute__(self, name):
+            return "!wrong" if name == "tag" else super().__getattribute__(name)
+
+    assert d.dumps(Sub("!right", "x")) == "!right x\n"
+
+
+def test_tags_do_not_nest_and_nothing_recurses(d):
+    inner = Tagged("!a", "x")
+    for value in (Tagged("!b", inner), [Tagged("!b", inner)], {"k": Tagged("!b", inner)}):
+        for flow in (False, True):
+            with pytest.raises(ValueError, match="two tags"):
+                d.dumps(value, flow=flow)
+    deep = Tagged("!t", "leaf")
+    for _ in range(100_000):
+        deep = Tagged("!t", deep)
+    with pytest.raises(ValueError, match="two tags"):
+        d.dumps(deep)
+    with pytest.raises(ValueError, match="two tags"):
+        d.dumps(Tagged("!t", b"x"))
+    with pytest.raises(ValueError, match="two tags"):
+        d.dumps(Tagged("!t", memoryview(b"x")))
+
+
+def test_a_container_freed_during_the_walk_is_not_a_cycle(d):
+    # Each level is a new object that is gone once the walk has moved on; a reused address must
+    # not read as the same container.
+    def gen(n):
+        if n == 0:
+            yield "leaf"
+            return
+        yield make(n - 1)
+
+    class L(list):
+        def __iter__(self):
+            return gen(self.n)
+
+    def make(n):
+        x = L([0])
+        x.n = n
+        return x
+
+    for depth in (10, 70, 200, 1000):
+        want = "- " * (depth + 1) + "leaf\n"
+        assert d.dumps(make(depth)) == want
+        assert (
+            d.dumps(make(depth), flow=True) == "[" * (depth + 1) + "leaf" + "]" * (depth + 1) + "\n"
+        )
+
+
+def test_the_cycle_check_costs_work_in_proportion_to_the_value(d):
+    ops = _api._impl._dump_path_ops
+    shallow = [[[[1]]], {"a": [{"b": []}]}]
+    ops(True)
+    d.dumps(shallow)
+    assert ops(True) == 0
+    # A deep chain ending in a wide level: each small container is entered once, so the work
+    # is a few operations per container, not a pass over the whole path for each.
+    depth, width = 200, 2000
+    leaf = [[0] for _ in range(width)]
+    chain = leaf
+    for _ in range(depth - 2):
+        chain = [chain]
+    for flow in (False, True):
+        ops(True)
+        d.dumps(chain, flow=flow)
+        assert ops(True) <= 2 * (depth + width)
+
+
+def test_a_cycle_through_a_subclass_or_a_mapping_is_found(d):
+    class L(list):
+        pass
+
+    a = L()
+    a.append(a)
+    with pytest.raises(ValueError, match="Circular"):
+        d.dumps(a)
+    m = {}
+    m["k"] = {"j": [m]}
+    with pytest.raises(ValueError, match="Circular"):
+        d.dumps(m, flow=True)
+
+
+def _in_a_memory_limited_process(backend, extra, limit_mb):
+    code = textwrap.dedent(
+        f"""
+        import resource, oneyaml
+        def vm():
+            with open("/proc/self/status") as f:
+                return next(int(l.split()[1]) for l in f if l.startswith("VmSize")) * 1024
+        x = list(range(8))
+        for _ in range({extra}):
+            x = [x, x]
+        limit = vm() + {limit_mb} * 2**20
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+        try:
+            oneyaml.dumps(x, flow=True)
+            print("written")
+        except MemoryError:
+            print("MemoryError")
+        """
+    )
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "ONEYAML_BACKEND": backend},
+    )
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="needs /proc and RLIMIT_AS")
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("limit_mb", [40, 150, 400])
+def test_running_out_of_memory_is_a_memory_error(backend, limit_mb):
+    # 2**24 leaves written to one line: gigabytes, far more than the limit.
+    done = _in_a_memory_limited_process(backend, 24, limit_mb)
+    assert done.returncode == 0, done.stderr[-400:]
+    assert done.stdout.strip() == "MemoryError"
+
+
+@pytest.mark.skipif(not HAS_NATIVE, reason="needs the native backend")
+def test_a_pending_signal_ends_a_native_dump():
+    big = [[i, "x"] for i in range(20_000)]
+    _native._test_hook(4)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            _native.dump([big], (2, False, False), False)
+        _native._test_hook(4)
+        with pytest.raises(KeyboardInterrupt):
+            _native.dump([big], (2, True, False), False)
+    finally:
+        _native._test_hook(0)
+
+
+def test_indent_is_checked_by_the_backend_itself(d):
+    impl = _api._impl
+    for bad in (0, 17, -1, 10**30, -(10**30)):
+        with pytest.raises(ValueError):
+            impl.dump([1], (bad, False, False), False)
+    for bad in ("2", 2.0, None, True):
+        with pytest.raises(TypeError):
+            impl.dump([1], (bad, False, False), False)
+
+
+def test_a_surrogate_in_a_tag_is_the_same_error_as_in_a_string(d):
+    with pytest.raises(ValueError) as in_tag:
+        d.dumps(Tagged("!a\ud800", 1))
+    with pytest.raises(ValueError) as in_text:
+        d.dumps("a\ud800")
+    assert str(in_tag.value) == str(in_text.value)
+
+
+# ---- the two backends read subclasses the same way ----------------------------------------
+
+
+class _Pairs(dict):
+    def items(self):
+        return [[k, v] for k, v in dict.items(self)]
+
+
+class _Triples(dict):
+    def items(self):
+        return [(k, v, "extra") for k, v in dict.items(self)]
+
+
+class _Singles(dict):
+    def items(self):
+        return [("only",)]
+
+
+class _NotPairs(dict):
+    def items(self):
+        return [5]
+
+
+class _ViaIter(tuple):
+    __slots__ = ()
+
+    def __iter__(self):
+        return iter(["via-iter", "value"])
+
+
+class _ViaIterItems(dict):
+    def items(self):
+        return [_ViaIter(("k", "v"))]
+
+
+class _Bytes1(bytes):
+    def __bytes__(self):
+        return b"other"
+
+
+class _Bytes2(bytes):
+    def __iter__(self):
+        return iter([300])
+
+
+class _ByteArray(bytearray):
+    def __bytes__(self):
+        return b"other"
+
+
+class _Lying(list):
+    def __len__(self):
+        return 0
+
+
+class _LyingMap(dict):
+    def __len__(self):
+        return 0
+
+
+class _Str(str):
+    def startswith(self, *a):
+        return False
+
+    def __len__(self):
+        return 0
+
+    def __getitem__(self, i):
+        return "?"
+
+
+class _Int(int):
+    def __repr__(self):
+        return "bogus"
+
+    __str__ = __repr__
+
+
+class _Float(float):
+    def __repr__(self):
+        return "bogus"
+
+    def __float__(self):
+        return 9.0
+
+
+_PROTOCOL_CASES = {
+    "pairs as lists": _Pairs(a=1),
+    "pairs as triples": _Triples(a=1),
+    "pairs of one": _Singles(a=1),
+    "entries that are not iterable": _NotPairs(a=1),
+    "tuple subclass entries": _ViaIterItems(a=1),
+    "bytes subclass with __bytes__": _Bytes1(b"xyz"),
+    "bytes subclass with __iter__": _Bytes2(b"xyz"),
+    "bytearray subclass": _ByteArray(b"xyz"),
+    "memoryview": memoryview(b"ab"),
+    "memoryview of ints": memoryview(__import__("array").array("i", [1, 2])),
+    "memoryview slice": memoryview(b"abcdef")[::2],
+    "sequence that says it is empty": {"k": _Lying([1, 2])},
+    "mapping that says it is empty": {"k": _LyingMap(a=1)},
+    "empty subclasses": {"k": _Lying(), "j": _LyingMap()},
+    "str subclass": [_Str("a b"), _Str(" x"), {_Str("key"): _Str("1")}],
+    "str subclass tag": Tagged(_Str("tag:yaml.org,2002:str"), "x"),
+    "str subclass tag, local": Tagged(_Str("!local"), _Str("x")),
+    "int subclass": [_Int(7), {_Int(3): _Int(2**70)}],
+    "float subclass": [_Float(1.5), _Float(1e17)],
+}
+
+
+@pytest.mark.skipif(not HAS_NATIVE, reason="needs the native backend")
+@pytest.mark.parametrize("flow", [False, True])
+@pytest.mark.parametrize("name", list(_PROTOCOL_CASES))
+def test_backends_read_subclasses_the_same_way(name, flow):
+    native, pure = _both(_PROTOCOL_CASES[name], flow=flow)
+    if isinstance(native, type) or isinstance(pure, type):
+        assert native is pure, (name, native, pure)
+    else:
+        assert native == pure, (name, native, pure)
+
+
+@pytest.mark.parametrize("flow", [False, True])
+def test_subclass_reading(d, flow):
+    def dump(v):
+        return d.dumps(v, flow=flow)
+
+    for value in (_Triples(a=1), _Singles(a=1), _NotPairs(a=1)):
+        with pytest.raises((ValueError, TypeError)):
+            dump(value)
+    for value in (_Triples(a=1), _Singles(a=1)):
+        with pytest.raises(ValueError):
+            dump(value)
+    with pytest.raises(TypeError):
+        dump(_NotPairs(a=1))
+    # Entries unpack as `k, v = entry` does.
+    assert dump(_Pairs(a=1)) == ("{a: 1}\n" if flow else "a: 1\n")
+    assert dump(_ViaIterItems(a=1)) == ("{via-iter: value}\n" if flow else "via-iter: value\n")
+    # Byte strings are the raw buffer.
+    raw = "!!binary eHl6\n"
+    assert dump(_Bytes1(b"xyz")) == raw
+    assert dump(_Bytes2(b"xyz")) == raw
+    assert dump(_ByteArray(b"xyz")) == raw
+    assert dump(memoryview(b"xyz")) == raw
+    assert dump(memoryview(b"abcdef")[::2]) == "!!binary YWNl\n"
+    # str, int and float subclasses are their base value.
+    assert dump(_Str("a b")) == "a b\n"
+    assert dump(_Int(7)) == "7\n"
+    assert dump(_Float(1.5)) == "1.5\n"
+    assert dump(Tagged(_Str("!local"), "x")) == "!local x\n"
+    # Emptiness is what iteration says, not what __len__ says.
+    assert dump({"k": _Lying([1, 2])}) == ("{k: [1, 2]}\n" if flow else "k:\n- 1\n- 2\n")
+    assert dump({"k": _LyingMap(a=1)}) == ("{k: {a: 1}}\n" if flow else "k:\n  a: 1\n")
+    assert dump({"k": _Lying()}) == ("{k: []}\n" if flow else "k: []\n")
+
+
+# ---- floats whose shortest form is not unique ---------------------------------------------------
+
+# The two shortest decimal forms of these differ in the last digit, and the interpreter's
+# repr picks one: -861927274670212.2 and -861927274670212.3 are both nearest-shortest.
+_TIES = [
+    -861927274670212.2, 1801514316094494.2, -673136162761606.2, 1273812973436447.2,
+    -2000723712327223.2, -1438096285768600.2, -1107780618034936.2, 1956873983951424.2,
+    -2244273033561874.2, 1720805954758130.2, -1858551618583540.2, -73091527877058.12,
+    -1072361184576926.2, 899725719067368.2, 94688732081205.62,
+]  # fmt: skip
+
+
+def _expected_float(x):
+    r = repr(x)
+    i = r.find("e")
+    return r[:i] + ".0" + r[i:] if i > 0 and "." not in r[:i] else r
+
+
+def test_floats_are_written_with_the_interpreters_digits(d):
+    for x in _TIES:
+        assert d.dumps(x) == _expected_float(x) + "\n", x
+        assert d.dumps([x], flow=True) == f"[{_expected_float(x)}]\n"
+        assert d.loads(d.dumps(x)) == x
+
+
+@pytest.mark.skipif(not HAS_NATIVE, reason="needs the native backend")
+def test_backends_write_the_same_float_digits():
+    rng = random.Random(1234)
+    values = list(_TIES)
+    for _ in range(30_000):
+        x = struct.unpack("<d", rng.getrandbits(64).to_bytes(8, "little"))[0]
+        if x == x and abs(x) != math.inf:
+            values.append(x)
+        values.append(rng.uniform(-1, 1) * 10.0 ** rng.randint(-20, 20))
+        values.append(float(rng.randint(-(10**17), 10**17)))
+    opts = (2, False, False)
+    assert _native.dump([values], opts, False) == _pure.dump([values], opts, False)
+    assert _native.dump([values], (2, True, False), False) == _pure.dump(
+        [values], (2, True, False), False
+    )
