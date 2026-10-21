@@ -68,5 +68,7 @@ def test_bad_value_is_rejected():
 
 def test_active_backend_matches_env():
     want = os.environ.get("ONEYAML_BACKEND", "auto")
-    assert oneyaml.backend == ("pure" if want == "pure" else "native")
+    # A run restricted to the pure backend has no native module to pick.
+    has_native = "native" in os.environ.get("ONEYAML_TEST_BACKENDS", "native,pure").split(",")
+    assert oneyaml.backend == ("pure" if want == "pure" or not has_native else "native")
     assert isinstance(oneyaml.__version__, str)

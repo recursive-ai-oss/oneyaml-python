@@ -95,16 +95,20 @@ def agree(a, b):
     return a == b
 
 
-def edits_agree(a, b):
-    """Two edits did the same: both worked, or both failed the same way. The engine refuses some
-    edits the pure backend can make (it will not move a comment to another owner, and it
-    refuses to remove an entry whose key is a collection): those it reports as category
-    ``other`` while the pure backend succeeds."""
+def edits_agree(a, b, refusal=""):
+    """Two edits did the same: both worked, or both failed the same way. Two refusals the engine
+    still makes where the pure backend edits: it will not give a trailing comment a new owner,
+    and it will not empty a block sequence that is followed by a comment (``refusal`` is the
+    native error message)."""
     if a[0] == b[0] == "ok":
         return True
     if a == b:
         return True
-    return a[:3] == ("error", "YAMLError", "other") and b[0] == "ok"
+    return (
+        a[:3] == ("error", "YAMLError", "other")
+        and b[0] == "ok"
+        and ("would belong to another owner" in refusal or "would not read back" in refusal)
+    )
 
 
 @pytest.mark.parametrize("text", DOCS)
@@ -322,8 +326,14 @@ def test_random_edits_agree(backends):
                 "remove": lambda h: h.remove(d, path),
             }
             a = outcome(lambda: calls[op](nat))
+            refusal = ""
+            if a[0] == "error":
+                try:
+                    calls[op](nat)  # an edit that fails leaves the document as it was
+                except Exception as e:  # noqa: BLE001 - only the message is wanted
+                    refusal = str(e)
             b = outcome(lambda: calls[op](pure))
-            assert edits_agree(a, b), (seed, op, d, path, a, b)
+            assert edits_agree(a, b, refusal), (seed, op, d, path, a, b)
             if a[0] != b[0] or a[0] == "error":
                 break  # the texts differ now: the engine refused what the pure backend did
             assert all(map(agree, state(nat), state(pure))), (seed, op, d, path)

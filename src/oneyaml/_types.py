@@ -103,6 +103,9 @@ class FrozenMapping(Mapping):
         return (FrozenMapping, (self._items,))
 
 
+_MISSING = object()
+
+
 def _same(a: Any, b: Any) -> bool:
     """Whether two loaded values are equal, compared with an explicit stack.
 
@@ -136,9 +139,12 @@ def _same(a: Any, b: Any) -> bool:
             if len(xi) != len(yi):
                 return False
             for key, value in xi.items():
-                if key not in yi:
+                # One lookup per key: each lookup may compare a nested key in full, so a
+                # second one (membership, then indexing) doubles the work at every level.
+                other = yi.get(key, _MISSING)
+                if other is _MISSING:
                     return False
-                push((value, yi[key]))
+                push((value, other))
         elif tx is tuple:
             if type(y) is not tuple or len(x) != len(y):
                 return False
@@ -232,7 +238,28 @@ def big_int(text: str) -> int:
 
 def int_text(value: int) -> str:
     """Decimal text of an integer with more digits than ``str`` converts under the interpreter's
-    cap on integer-string conversion (the cap does not apply to ``Decimal``)."""
-    from decimal import Decimal
+    cap on integer-string conversion.
 
-    return str(Decimal(value))
+    Splits the number in halves by powers of ten until the pieces are short enough for ``str``.
+    (``Decimal`` is not an answer: it skips the cap on CPython, but PyPy's converts through
+    ``str`` and hits the cap too.)
+    """
+    step = sys.int_info.str_digits_check_threshold  # the shortest cap any setting allows
+    n = abs(value)
+    powers = [10**step]
+    while powers[-1] <= n:
+        powers.append(powers[-1] * powers[-1])
+
+    # Depth is the log of the digit count, so this recursion follows the integer's size and
+    # never the input's nesting.
+    def conv(n: int, k: int, pad: bool) -> str:
+        if k < 0:
+            text = str(n)
+            return text.zfill(step) if pad else text
+        hi, lo = divmod(n, powers[k])
+        if hi == 0 and not pad:
+            return conv(lo, k - 1, False)
+        return conv(hi, k - 1, pad) + conv(lo, k - 1, True)
+
+    text = conv(n, len(powers) - 1, False)
+    return "-" + text if value < 0 else text

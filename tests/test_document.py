@@ -821,13 +821,5 @@ def test_collection_keys_are_addressed_by_value(api):
     assert (1, 2) in doc and (2, 1) not in doc
     doc[(1, 2)] = "changed"
     assert doc.to_python() == {(1, 2): "changed", keys[1]: "map", "plain": 3}
-    # The engine does not remove an entry whose key is a collection; the document is left as it was.
-    before = str(doc)
-    if api.name == "native":
-        with pytest.raises(YAMLError):
-            del doc[keys[1]]
-        assert str(doc) == before
-        assert oneyaml.loads(before)[(1, 2)] == "changed"
-    else:
-        del doc[keys[1]]
-        assert oneyaml.loads(str(doc)) == {(1, 2): "changed", "plain": 3}
+    del doc[keys[1]]
+    assert oneyaml.loads(str(doc)) == {(1, 2): "changed", "plain": 3}

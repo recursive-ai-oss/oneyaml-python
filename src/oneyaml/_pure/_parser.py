@@ -371,11 +371,12 @@ def _quoted(s: str, j: int, n: int, fmin: int) -> tuple[int, str, bool]:
     return e, raw, multi
 
 
-_PCT_ASCII = re.compile(r"%([0-7][0-9A-Fa-f])")
+# %25 stays escaped: decoding it would make "%2541" read as the same tag as "%41".
+_PCT_ASCII = re.compile(r"%(?!25)([0-7][0-9A-Fa-f])")
 
 
 def _unpercent(text: str) -> str:
-    """Expand escaped ASCII characters; escapes of other bytes stay as written."""
+    """Expand escaped ASCII characters; escapes of other bytes and of "%" stay as written."""
     if "%" not in text:
         return text
     return _PCT_ASCII.sub(lambda m: chr(int(m.group(1), 16)), text)
