@@ -6,7 +6,7 @@
 //! value and never through overridden methods, except that a dict subclass is read through
 //! `items()`, as a dump does.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use oneyaml::{Mapping, Tag, TaggedValue, Value};
 use pyo3::buffer::PyBuffer;
@@ -18,14 +18,34 @@ use pyo3::types::{
 
 use crate::classes;
 use crate::errors::Fail;
+use crate::limits::Lim;
 
 const BINARY: &str = "tag:yaml.org,2002:binary";
+
+/// What a value expands to: nodes, and bytes of text.
+#[derive(Clone, Copy, Default)]
+struct Size {
+    nodes: usize,
+    bytes: usize,
+}
+
+impl Size {
+    fn add(&mut self, other: Size) {
+        self.nodes = self.nodes.saturating_add(other.nodes);
+        self.bytes = self.bytes.saturating_add(other.bytes);
+    }
+}
+
+/// How often a long conversion looks for Ctrl-C.
+const SIGNAL_EVERY: usize = 4096;
 
 enum Frame<'py> {
     Seq {
         items: Vec<Value>,
         rest: std::vec::IntoIter<Bound<'py, PyAny>>,
         id: usize,
+        size: Size,
+        free: bool,
     },
     Map {
         map: Mapping,
@@ -34,11 +54,45 @@ enum Frame<'py> {
         /// The value of the entry whose key was just handed out.
         pending: Option<Bound<'py, PyAny>>,
         id: usize,
+        size: Size,
+        free: bool,
     },
     Tagged {
         tag: String,
         id: usize,
+        size: Size,
+        free: bool,
     },
+}
+
+impl Frame<'_> {
+    /// Whether this frame is inside a shared object whose whole size was already charged.
+    fn free(&self) -> bool {
+        match self {
+            Frame::Seq { free, .. } | Frame::Map { free, .. } | Frame::Tagged { free, .. } => *free,
+        }
+    }
+
+    fn set_free(&mut self, value: bool) {
+        match self {
+            Frame::Seq { free, .. } | Frame::Map { free, .. } | Frame::Tagged { free, .. } => {
+                *free = value;
+            }
+        }
+    }
+}
+
+/// A leaf's size: one node and the bytes of its text.
+fn leaf_size(v: &Value) -> Size {
+    let bytes = match v {
+        Value::String(s) => s.len(),
+        Value::Tagged(t) => match &t.value {
+            Value::String(s) => s.len(),
+            _ => 0,
+        },
+        _ => 0,
+    };
+    Size { nodes: 1, bytes }
 }
 
 enum Step<'py> {
@@ -142,7 +196,11 @@ fn step<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>, digits: usize) -> Result<
             return Ok(Step::Leaf(Value::from(i)));
         }
         // Wider than 64 bits (or a subclass): written from its decimal digits, within the cap.
-        let bits: u64 = obj.call_method0("bit_length")?.extract()?;
+        // Through `int` itself: a subclass's own `bit_length` is never asked.
+        let bits: u64 = py
+            .get_type::<PyInt>()
+            .call_method1("bit_length", (obj,))?
+            .extract()?;
         if bits as f64 * std::f64::consts::LOG10_2 > digits as f64 + 1.0 {
             return Err(yaml_fail(
                 "limit",
@@ -209,7 +267,15 @@ fn step<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>, digits: usize) -> Result<
     if obj.is_instance(classes::tagged(py)?)? {
         let tag: String = obj.getattr("tag")?.extract()?;
         let value = obj.getattr("value")?;
-        return Ok(Step::Open(Frame::Tagged { tag, id }, Some(value)));
+        return Ok(Step::Open(
+            Frame::Tagged {
+                tag,
+                id,
+                size: Size { nodes: 1, bytes: 0 },
+                free: false,
+            },
+            Some(value),
+        ));
     }
     if let Ok(b) = obj.cast::<PyBytes>() {
         return Ok(Step::Leaf(binary(b.as_bytes())));
@@ -263,6 +329,8 @@ fn open_seq<'py>(items: Vec<Bound<'py, PyAny>>, id: usize) -> Step<'py> {
             items: Vec::with_capacity(items.len()),
             rest: items.into_iter(),
             id,
+            size: Size { nodes: 1, bytes: 0 },
+            free: false,
         },
         None,
     )
@@ -276,30 +344,65 @@ fn open_map<'py>(entries: Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>, id: usize
             key: None,
             pending: None,
             id,
+            size: Size { nodes: 1, bytes: 0 },
+            free: false,
         },
         None,
     )
 }
 
-/// Convert `obj`. Nesting deeper than `max_depth` is a `limit` failure.
-pub fn to_value<'py>(
-    py: Python<'py>,
-    obj: &Bound<'py, PyAny>,
-    max_depth: usize,
-    digits: usize,
-) -> Result<Value, Fail> {
+/// Convert `obj`. Nesting deeper than the depth limit is a `limit` failure, and so is a value
+/// that expands, by sharing, to more than the alias budgets allow: a shared object met again
+/// costs its full size again (as an alias does in a load), and that is charged before any of
+/// it is copied.
+pub fn to_value<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>, lim: &Lim) -> Result<Value, Fail> {
+    let max_depth = lim.depth;
+    let digits = lim.digits;
     let mut stack: Vec<Frame<'py>> = Vec::new();
     let mut on_path: HashSet<usize> = HashSet::new();
     let mut alive: Vec<Bound<'py, PyAny>> = Vec::new();
+    // Containers already converted, with what each expands to.
+    let mut seen: HashMap<usize, Size> = HashMap::new();
+    let mut own = Size::default();
+    let mut charged = Size::default();
+    let mut steps = 0usize;
     // The objects of the frames on the path stay referenced by the caller's data; a container
     // that is dropped and reallocated while we run would need Python code, which we never run.
     let mut next: Option<Bound<'py, PyAny>> = Some(obj.clone());
     let mut done: Option<Value> = None;
+    let mut done_size = Size::default();
     loop {
         if let Some(o) = next.take() {
+            steps += 1;
+            if steps % SIGNAL_EVERY == 0 {
+                py.check_signals()?;
+            }
+            let in_free = stack.last().is_some_and(Frame::free);
+            let again = seen.get(&(o.as_ptr() as usize)).copied();
+            if let (false, Some(size)) = (in_free, again) {
+                charged.add(size);
+                if charged.nodes > lim.node_budget(own.nodes) {
+                    return Err(yaml_fail(
+                        "limit",
+                        "the value shares parts of itself so much that it expands past the node limit",
+                    ));
+                }
+                if charged.bytes > lim.byte_budget(own.bytes) {
+                    return Err(yaml_fail(
+                        "limit",
+                        "the value shares parts of itself so much that it expands past the byte limit",
+                    ));
+                }
+            }
             match step(py, &o, digits)? {
-                Step::Leaf(v) => done = Some(v),
-                Step::Open(frame, first) => {
+                Step::Leaf(v) => {
+                    done_size = leaf_size(&v);
+                    if !in_free {
+                        own.add(done_size);
+                    }
+                    done = Some(v);
+                }
+                Step::Open(mut frame, first) => {
                     // Keep the container alive for the whole conversion: a freed one's address
                     // could be handed to a new container, which would look like a cycle.
                     alive.push(o.clone());
@@ -320,6 +423,11 @@ pub fn to_value<'py>(
                             at: None,
                         });
                     }
+                    let free = in_free || again.is_some();
+                    if !free {
+                        own.nodes = own.nodes.saturating_add(1);
+                    }
+                    frame.set_free(free);
                     stack.push(frame);
                     next = first;
                     if next.is_some() {
@@ -334,17 +442,26 @@ pub fn to_value<'py>(
             if let Some(v) = done.take() {
                 match stack.last_mut() {
                     None => return Ok(v),
-                    Some(Frame::Seq { items, .. }) => items.push(v),
-                    Some(Frame::Map { map, key, .. }) => match key.take() {
-                        None => *key = Some(v),
-                        Some(k) => {
-                            if map.insert(k, v).is_some() {
-                                return Err(yaml_fail("other", "duplicate mapping key"));
+                    Some(Frame::Seq { items, size, .. }) => {
+                        items.push(v);
+                        size.add(done_size);
+                    }
+                    Some(Frame::Map { map, key, size, .. }) => {
+                        size.add(done_size);
+                        match key.take() {
+                            None => *key = Some(v),
+                            Some(k) => {
+                                if map.insert(k, v).is_some() {
+                                    return Err(yaml_fail("other", "duplicate mapping key"));
+                                }
                             }
                         }
-                    },
-                    Some(Frame::Tagged { tag, id }) => {
+                    }
+                    Some(Frame::Tagged { tag, id, size, .. }) => {
                         let (tag, id) = (std::mem::take(tag), *id);
+                        size.add(done_size);
+                        done_size = *size;
+                        seen.insert(id, done_size);
                         stack.pop();
                         on_path.remove(&id);
                         done = Some(Value::Tagged(Box::new(TaggedValue {
@@ -359,13 +476,21 @@ pub fn to_value<'py>(
                 return Err(internal("empty conversion stack"));
             };
             match top {
-                Frame::Seq { rest, items, id } => match rest.next() {
+                Frame::Seq {
+                    rest,
+                    items,
+                    id,
+                    size,
+                    ..
+                } => match rest.next() {
                     Some(o) => {
                         next = Some(o);
                         break;
                     }
                     None => {
                         let (items, id) = (std::mem::take(items), *id);
+                        done_size = *size;
+                        seen.insert(id, done_size);
                         stack.pop();
                         on_path.remove(&id);
                         done = Some(Value::from(items));
@@ -376,6 +501,7 @@ pub fn to_value<'py>(
                     pending,
                     map,
                     id,
+                    size,
                     ..
                 } => {
                     let following = match pending.take() {
@@ -392,6 +518,8 @@ pub fn to_value<'py>(
                         }
                         None => {
                             let (map, id) = (std::mem::take(map), *id);
+                            done_size = *size;
+                            seen.insert(id, done_size);
                             stack.pop();
                             on_path.remove(&id);
                             done = Some(Value::Mapping(map));

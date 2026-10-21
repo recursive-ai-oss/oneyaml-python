@@ -10,14 +10,13 @@ of quietly addressing whatever is there now.
 
 from __future__ import annotations
 
-import re
 import sys
 import threading
 from collections.abc import Iterator, MutableMapping, MutableSequence, Sequence
 from typing import IO, Any, NamedTuple
 
 from . import _api
-from ._errors import YAMLError
+from ._errors import PatchError, YAMLError
 from ._limits import Limits
 from ._types import FrozenMapping
 
@@ -62,28 +61,43 @@ def _norm(token: Any) -> str:
     return str(token)
 
 
+_KIDS = dict  # the map type of the books' tree (a test swaps in one that counts lookups)
+
+
+class _Book:
+    """What edits did at one path: the node there was removed or replaced (``dead``), or the
+    items of the sequence there moved (``moves``, ``floor``). Children are the paths below."""
+
+    __slots__ = ("dead", "floor", "kids", "moves")
+
+    def __init__(self) -> None:
+        self.dead = 0
+        self.floor = 0
+        self.moves: list[tuple[int, int]] | None = None
+        self.kids: dict[str, _Book] = _KIDS()
+
+
 class _Core:
     """What every view of one stream shares: the backend handle and what edits did to paths.
 
-    An edit that removes or replaces the node at a path stamps that path in ``dead``; one that
-    moves the items of a sequence from an index on stamps the sequence in ``shifts``. A view
-    asks only about the prefixes of its own path, so a check costs the depth of the view and
-    never the number of edits made since the view was taken.
+    An edit that removes or replaces the node at a path stamps that path in a tree of books
+    (one per document); one that moves the items of a sequence from an index on stamps the
+    sequence. A view asks about the books along its own path in one pass down the tree, so a
+    check costs the depth of the view and never the number of edits made since the view was
+    taken, and stops at the first path nothing was ever recorded under.
     """
 
-    __slots__ = ("dead", "floor", "floors", "h", "lock", "shifts", "tick")
+    __slots__ = ("books", "floor", "h", "lock", "nbooks", "tick")
 
     def __init__(self, handle: Any) -> None:
         self.h = handle
         # Held across "is this view still good?" + the backend call + the note of an edit, so
         # that another thread's insert cannot slip in between and move the item under a view.
+        # No user code ever runs under it: values are converted before it is taken.
         self.lock = threading.RLock()
         self.tick = 0
-        self.dead: dict[tuple[str, ...], int] = {}
-        self.shifts: dict[tuple[str, ...], list[tuple[int, int]]] = {}
-        # Sequences shifted so often that the individual shifts were folded into one stamp:
-        # every item view of them older than the stamp counts as moved.
-        self.floors: dict[tuple[str, ...], int] = {}
+        self.books: dict[int, _Book] = {}
+        self.nbooks = 0
         # Views older than this are all treated as stale (the books were cleared).
         self.floor = 0
 
@@ -91,51 +105,62 @@ class _Core:
         """Note an edit: the node at ``path`` is gone (``index`` None), or the items of the
         sequence at ``path`` from ``index`` on moved."""
         self.tick += 1
-        key = (str(d), *map(_norm, path))
+        book = self.books.get(d)
+        if book is None:
+            book = self.books[d] = _Book()
+            self.nbooks += 1
+        for step in path:
+            name = _norm(step)
+            kid = book.kids.get(name)
+            if kid is None:
+                kid = book.kids[name] = _Book()
+                self.nbooks += 1
+            book = kid
         if index is None:
-            self.dead[key] = self.tick
+            book.dead = self.tick
         else:
-            moves = self.shifts.setdefault(key, [])
-            moves.append((self.tick, index))
-            if len(moves) > _SHIFTS_KEPT:
-                self.floors[key] = self.tick
-                moves.clear()
-        if len(self.dead) + len(self.shifts) + len(self.floors) > _BOOKS_MAX:
-            self.dead.clear()
-            self.shifts.clear()
-            self.floors.clear()
+            if book.moves is None:
+                book.moves = []
+            book.moves.append((self.tick, index))
+            if len(book.moves) > _SHIFTS_KEPT:
+                book.floor = self.tick
+                book.moves.clear()
+        if self.nbooks > _BOOKS_MAX:
+            self._clear()
             self.floor = self.tick
+
+    def _clear(self) -> None:
+        self.books.clear()
+        self.nbooks = 0
 
     def invalidate(self) -> None:
         """Every view taken so far is stale: a patch changed the document in ways not tracked
         edit by edit. A document's root is not a view of a node and stays good."""
         self.tick += 1
-        self.dead.clear()
-        self.shifts.clear()
-        self.floors.clear()
+        self._clear()
         self.floor = self.tick
 
     def stale(self, d: int, path: tuple, tick: int) -> bool:
         if tick < self.floor and path:
             return True
-        dead, shifts, floors = self.dead, self.shifts, self.floors
-        key: tuple[str, ...] = (str(d),)
+        book = self.books.get(d)
         last = len(path)
-        for i in range(last + 1):
-            if dead.get(key, 0) > tick:
+        i = 0
+        while book is not None:
+            if book.dead > tick:
                 return True
             if i == last:
                 return False
             step = _norm(path[i])
-            moves = shifts.get(key)
-            if moves is not None or floors.get(key, 0) > tick:
-                if floors.get(key, 0) > tick:
+            if book.floor > tick:
+                return True
+            moves = book.moves
+            if moves and step.isdigit():
+                at = int(step)
+                if any(t > tick and index <= at for t, index in moves):
                     return True
-                if moves and step.isdigit():
-                    at = int(step)
-                    if any(t > tick and index <= at for t, index in moves):
-                        return True
-            key = (*key, step)
+            book = book.kids.get(step)
+            i += 1
         return False
 
 
@@ -217,8 +242,7 @@ class _Node:
     def __setitem__(self, key: Any, value: Any) -> None:
         if isinstance(key, slice):
             raise TypeError("slice assignment is not supported")
-        if isinstance(value, _Node):
-            value = value.to_python()
+        value = self._prepared(value)
         with self._core.lock:
             _, path = self._keyed(key)
             h = self._h()
@@ -226,6 +250,14 @@ class _Node:
             h.set(self._d, list(path), value)
             if h.version() != before:
                 self._core.record(self._d, path)
+
+    def _prepared(self, value: Any) -> Any:
+        """The value as the backend wants it, converted before the stream lock is taken: reading
+        it may run any code of the caller's (a lazy sequence, say), which must never run while
+        another thread waits for that lock."""
+        if isinstance(value, _Node):
+            value = value.to_python()
+        return self._core.h.prepare(value)
 
     def __delitem__(self, key: Any) -> None:
         if isinstance(key, slice):
@@ -367,8 +399,7 @@ class SequenceView(_Node, MutableSequence):
         return _Node.__eq__(self, other)
 
     def insert(self, index: int, value: Any) -> None:
-        if isinstance(value, _Node):
-            value = value.to_python()
+        value = self._prepared(value)
         with self._core.lock:
             h = self._h()
             if index < 0:
@@ -382,8 +413,7 @@ class SequenceView(_Node, MutableSequence):
     def append(self, value: Any) -> None:
         # One call into the backend: the length is not read first, so two threads appending
         # never choose the same place.
-        if isinstance(value, _Node):
-            value = value.to_python()
+        value = self._prepared(value)
         with self._core.lock:
             self._h().insert(self._d, list(self._path), sys.maxsize, value)
 
@@ -493,18 +523,21 @@ class Document(_Node):
     def at(self, pointer: str, *, document: int | None = None) -> Any:
         """The value at an RFC 6901 pointer (``"/spec/containers/0/image"``): plain data for a
         scalar, a view for a collection. A missing path raises ``KeyError`` or ``IndexError``."""
-        steps = _pointer(pointer)
+        if not isinstance(pointer, str):
+            raise TypeError(f"a pointer is a str, not {type(pointer).__name__}")
         d = self._d if document is None else document
         node = Document(self._core, d, ())
         if document is not None and not 0 <= d < self._core.h.count():
             raise IndexError("document index out of range")
-        if not steps:
+        if not pointer:
             return node if node._kind() != "scalar" else node.to_python()
         with self._core.lock:
-            # The engine reads the pointer by the text of the keys: two keys with the same text
-            # make it ambiguous, which is refused here rather than answered with one of them.
-            self._core.h.pointer(d, pointer)
-            return node._view(tuple(steps))
+            # The engine reads the pointer, naming a key by its text; two keys with the same
+            # text make it ambiguous, which is refused rather than answered with one of them.
+            # What it finds is addressed by the keys' own values, so a view of it is stale when
+            # exactly that key goes.
+            path = self._core.h.resolve(d, pointer)
+            return node._view(tuple(path))
 
     def patch(self, ops: Any, *, document: int | None = None) -> None:
         """Apply an RFC 6902 patch, all or nothing.
@@ -527,10 +560,12 @@ class Document(_Node):
         if isinstance(d, bool) or not isinstance(d, int):
             raise TypeError(f"document must be an integer, not {type(d).__name__}")
         if d < 0:
-            raise ValueError("document must not be negative")
+            raise PatchError(f"the stream has no document {d}", category="patch-path")
         if isinstance(patch, _Node):
             patch = patch.to_python()
         core = self._core
+        if not isinstance(patch, str):
+            patch = core.h.prepare(patch)
         with core.lock:
             before = core.h.version()
             getattr(core.h, how)(min(d, sys.maxsize), patch)
@@ -549,31 +584,6 @@ def _is_binary(fp: Any) -> bool:
     if isinstance(fp, io.TextIOBase):
         return False
     return "b" in getattr(fp, "mode", "")
-
-
-_ESCAPE = re.compile(r"~(.?)")
-
-
-def _unescape(match: re.Match[str]) -> str:
-    c = match.group(1)
-    if c == "0":
-        return "~"
-    if c == "1":
-        return "/"
-    raise ValueError("in a JSON pointer, '~' must be followed by 0 or 1")
-
-
-def _pointer(pointer: str) -> list[str]:
-    """Split an RFC 6901 pointer into its tokens, unescaped."""
-    if not isinstance(pointer, str):
-        raise TypeError(f"a pointer is a str, not {type(pointer).__name__}")
-    if pointer == "":
-        return []
-    if pointer[0] != "/":
-        raise ValueError("a JSON pointer is empty or starts with '/'")
-    return [
-        _ESCAPE.sub(_unescape, part) if "~" in part else part for part in pointer[1:].split("/")
-    ]
 
 
 _DEFAULT_LIMITS = Limits()

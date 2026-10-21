@@ -98,6 +98,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_function(wrap_pyfunction!(document::parse, m)?)?;
     m.add_class::<document::Handle>()?;
+    m.add_class::<document::Prepared>()?;
     m.add_function(wrap_pyfunction!(events_text, m)?)?;
     m.add_function(wrap_pyfunction!(_parse_only, m)?)?;
     m.add_function(wrap_pyfunction!(_panic_probe, m)?)?;

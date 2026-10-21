@@ -317,8 +317,9 @@ def test_bad_document_arguments(api):
         doc.patch([], document="1")
     with pytest.raises(TypeError):
         doc.patch([], document=True)
-    with pytest.raises(ValueError):
+    with pytest.raises(PatchError) as e:
         doc.patch([], document=-1)
+    assert e.value.category == "patch-path"
 
 
 # ---- views after a patch ----------------------------------------------------------------------

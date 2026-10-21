@@ -54,7 +54,14 @@ impl Tok {
         match self {
             Tok::Text(s) => s.clone(),
             Tok::Int(i) => i.to_string(),
-            Tok::Key(v) => format!("{v:?}"),
+            Tok::Key(v) => match v {
+                Value::Null => "None".to_string(),
+                Value::Bool(true) => "True".to_string(),
+                Value::Bool(false) => "False".to_string(),
+                Value::Number(n) => n.to_string(),
+                Value::String(s) => s.clone(),
+                _ => "a collection".to_string(),
+            },
         }
     }
 
@@ -72,7 +79,11 @@ fn tokens(path: &Bound<'_, PyAny>) -> PyResult<Vec<Tok>> {
     for item in path.try_iter()? {
         let item = item?;
         out.push(if let Ok(s) = item.cast::<PyString>() {
-            Tok::Text(s.to_str()?.to_string())
+            match s.to_str() {
+                Ok(t) => Tok::Text(t.to_string()),
+                // No key holds a lone surrogate, so no key is named by it.
+                Err(_) => return Err(PyKeyError::new_err(s.to_string_lossy().into_owned())),
+            }
         } else if let Ok(b) = item.cast::<PyBool>() {
             Tok::Key(Value::Bool(b.is_true()))
         } else if item.is_instance_of::<PyInt>() {
@@ -85,6 +96,10 @@ fn tokens(path: &Bound<'_, PyAny>) -> PyResult<Vec<Tok>> {
                         Err(_) => return Err(PyKeyError::new_err(text)),
                     },
                 },
+                // Beyond the digit cap Python itself sets: no key is that long.
+                Err(e) if e.is_instance_of::<pyo3::exceptions::PyValueError>(item.py()) => {
+                    return Err(PyKeyError::new_err("an integer with too many digits"));
+                }
                 Err(_) => return Err(PyTypeError::new_err("an integer token has no digits")),
             }
         } else if let Ok(f) = item.cast::<PyFloat>() {
@@ -94,7 +109,14 @@ fn tokens(path: &Bound<'_, PyAny>) -> PyResult<Vec<Tok>> {
         } else {
             // A mapping key that is itself a collection (a tuple, a `FrozenMapping`), as
             // `keys` hands it out.
-            match pyvalue::to_value(item.py(), &item, KEY_DEPTH, 4300) {
+            match pyvalue::to_value(
+                item.py(),
+                &item,
+                &Lim {
+                    depth: KEY_DEPTH,
+                    ..Lim::DEFAULT
+                },
+            ) {
                 Ok(v @ (Value::Sequence(_) | Value::Mapping(_))) => Tok::Key(v),
                 _ => {
                     return Err(PyTypeError::new_err(
@@ -704,12 +726,30 @@ impl Handle {
     }
 
     fn to_value<'py>(&self, py: Python<'py>, v: &Bound<'py, PyAny>) -> PyResult<Value> {
-        pyvalue::to_value(py, v, self.lim.depth, self.lim.digits).map_err(|f| Self::fail(py, f))
+        if let Ok(p) = v.cast::<Prepared>() {
+            return Ok(p.get().value.clone());
+        }
+        pyvalue::to_value(py, v, &self.lim).map_err(|f| Self::fail(py, f))
     }
+}
+
+/// A value converted ahead of an edit, so that no user code runs while the document's own
+/// lock is held: the conversion may call any Python code (a lazy sequence, a `__getitem__`).
+#[pyclass(frozen, module = "oneyaml._native")]
+pub struct Prepared {
+    value: Value,
 }
 
 /// The Python exception for a failed patch: its kind is the category (the edit layer's own
 /// refusals are `other`), and the failing operation's index rides along.
+fn raise_patch(py: Python<'_>, message: &str, category: &str) -> PyErr {
+    let build = || -> PyResult<PyErr> {
+        let err = classes::make_patch_error(py)?.call1((message, category, py.None()))?;
+        Ok(PyErr::from_value(err))
+    };
+    build().unwrap_or_else(|e| e)
+}
+
 fn patch_pyerr(py: Python<'_>, e: &oneyaml::PatchError) -> PyErr {
     let category = match e.kind() {
         PatchErrorKind::Edit => "other",
@@ -985,11 +1025,20 @@ impl Handle {
                         None,
                     )
                 })?;
-                Patch::from_json(text)
+                // Read with this document's limits, as a load would read it.
+                oneyaml::from_str_with::<Value>(text, &self.lim.settings())
+                    .map_err(|e| {
+                        let category = if e.kind() == oneyaml::ErrorKind::Limit {
+                            "limit"
+                        } else {
+                            "patch-invalid"
+                        };
+                        raise_patch(py, &format!("the patch text cannot be read: {e}"), category)
+                    })
+                    .and_then(|v| Patch::from_value(v).map_err(|e| patch_pyerr(py, &e)))
             } else {
-                Patch::from_value(self.to_value(py, ops)?)
-            }
-            .map_err(|e| patch_pyerr(py, &e))?;
+                Patch::from_value(self.to_value(py, ops)?).map_err(|e| patch_pyerr(py, &e))
+            }?;
             let writes = patch
                 .ops()
                 .iter()
@@ -1018,19 +1067,91 @@ impl Handle {
         })
     }
 
-    /// Whether an RFC 6901 pointer names a node, read by the key's text. A pointer that two keys
-    /// match, or that is not a pointer, is an error; a missing path is `False`.
-    fn pointer(&self, py: Python<'_>, d: usize, pointer: &str) -> PyResult<bool> {
+    /// Convert a value ahead of an edit (see `Prepared`). Takes no lock.
+    fn prepare(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<Prepared> {
         guarded(py, || {
-            let st = self.lock(py)?;
-            let doc = st
-                .stream
-                .document(d)
-                .ok_or_else(|| PyIndexError::new_err(format!("no document {d} in the stream")))?;
-            match doc.get_pointer(pointer) {
-                Ok(_) => Ok(true),
-                Err(e) if e.kind() == PatchErrorKind::Path => Ok(false),
-                Err(e) => Err(patch_pyerr(py, &e)),
+            Ok(Prepared {
+                value: self.to_value(py, value)?,
+            })
+        })
+    }
+
+    /// The path of exact key tokens a pointer leads to, read as the engine reads it: a key is
+    /// named by its text. A pointer two keys match, or that is not a pointer, is a `PatchError`;
+    /// a path to nothing is a `KeyError` or `IndexError`.
+    fn resolve<'py>(
+        &self,
+        py: Python<'py>,
+        d: usize,
+        pointer: &Bound<'py, PyString>,
+    ) -> PyResult<Bound<'py, PyList>> {
+        guarded(py, || {
+            let Ok(text) = pointer.to_str() else {
+                return Err(raise_patch(
+                    py,
+                    "the pointer holds a lone surrogate, which is not text",
+                    "patch-invalid",
+                ));
+            };
+            let parsed = oneyaml::Pointer::parse(text).map_err(|e| patch_pyerr(py, &e))?;
+            let mut st = self.lock(py)?;
+            let cached = st.nodes.get(&d).copied();
+            let doc = Self::doc(&mut st, d)?;
+            let engine = doc.get_pointer_tokens(&parsed).map(|_| ());
+            let found = path_of(&doc, parsed.tokens());
+            match (engine, found) {
+                (Err(e), Err(miss)) if e.kind() == PatchErrorKind::Path => Err(miss.into_err(py)),
+                (Err(e), _) => Err(patch_pyerr(py, &e)),
+                (Ok(()), Err(_)) => Err(raise(
+                    py,
+                    "internal error reading a pointer; this is a bug",
+                    "other",
+                    None,
+                    None,
+                )),
+                (Ok(()), Ok(keys)) => {
+                    let out = PyList::empty(py);
+                    let span = doc.span();
+                    let mut b = Builder::for_walk(
+                        py,
+                        self.lim,
+                        span.start,
+                        cached.unwrap_or(0),
+                        span.end - span.start,
+                    );
+                    let mut w = Walk {
+                        nodes: cached,
+                        ..Walk::default()
+                    };
+                    let count = || count_nodes(&doc);
+                    for step in keys {
+                        match step {
+                            Step::Index(i) => out.append(i.to_string())?,
+                            Step::Key(k) => {
+                                if let Err(f) = feed(&mut b, &mut w, k, self.lim.digits, &count) {
+                                    return Err(Self::fail(py, f));
+                                }
+                                let Some(mut key) = b.take_root() else {
+                                    continue;
+                                };
+                                if key.hash().is_err() {
+                                    key = classes::freeze(py)?
+                                        .call1((key, i64::MAX, i64::MAX))?
+                                        .get_item(0)?;
+                                }
+                                out.append(key)?;
+                            }
+                        }
+                    }
+                    let counted = w.nodes;
+                    drop(b);
+                    if cached.is_none()
+                        && let Some(total) = counted
+                    {
+                        st.nodes.insert(d, total);
+                    }
+                    Ok(out)
+                }
             }
         })
     }
@@ -1146,6 +1267,55 @@ impl Handle {
             Ok(())
         })
     }
+}
+
+/// One step of a pointer's path: the key node of a mapping entry, or an index.
+enum Step<'d> {
+    Key(NodeRef<'d>),
+    Index(usize),
+}
+
+/// The entries a pointer's tokens lead through, naming a key by its text (what the engine
+/// does), following aliases on the way.
+fn path_of<'d>(doc: &'d Document, tokens: &[String]) -> Result<Vec<Step<'d>>, Miss> {
+    let mut node = doc.root().ok_or(Miss::NoRoot)?;
+    let mut out = Vec::with_capacity(tokens.len());
+    for tok in tokens {
+        node = node.resolved();
+        node = match node.kind() {
+            NodeKind::Mapping => {
+                let m = node.as_mapping().ok_or_else(|| Miss::Key(tok.clone()))?;
+                let mut hit = None;
+                for (k, v) in m.iter() {
+                    let named = k
+                        .resolved()
+                        .as_scalar()
+                        .is_some_and(|sc| sc.value() == tok.as_str());
+                    if named {
+                        hit = Some((k, v));
+                    }
+                }
+                let Some((k, v)) = hit else {
+                    return Err(Miss::Key(tok.clone()));
+                };
+                out.push(Step::Key(k));
+                v
+            }
+            NodeKind::Sequence => {
+                let s = node.as_sequence().ok_or_else(|| Miss::Key(tok.clone()))?;
+                let Some(i) = seq_index(&Tok::Text(tok.clone())) else {
+                    return Err(seq_miss(&Tok::Text(tok.clone()), s.len()));
+                };
+                let Some(n) = s.get(i) else {
+                    return Err(Miss::Index(tok.clone(), s.len()));
+                };
+                out.push(Step::Index(i));
+                n
+            }
+            _ => return Err(Miss::NotCollection(tok.clone())),
+        };
+    }
+    Ok(out)
 }
 
 fn changed(st: &mut State, structural: bool) {

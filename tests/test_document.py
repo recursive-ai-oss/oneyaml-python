@@ -12,6 +12,7 @@ from oneyaml import (
     LimitError,
     Limits,
     MappingView,
+    PatchError,
     SequenceView,
     StaleViewError,
     Tagged,
@@ -290,10 +291,11 @@ def test_pointers(api):
         doc.at("/spec/zz")
     with pytest.raises(IndexError):
         doc.at("/spec/containers/5")
-    with pytest.raises(ValueError):
-        doc.at("spec")
-    with pytest.raises(ValueError):
-        doc.at("/a~2")
+    # A pointer that is not one is a patch error, as it is for a patch.
+    for bad in ("spec", "/a~2", "/a~"):
+        with pytest.raises(PatchError) as e:
+            doc.at(bad)
+        assert e.value.category == "patch-invalid"
     with pytest.raises(TypeError):
         doc.at(3)
     for text in ("/spec/containers/01", "/spec/containers/-", "/spec/containers/x"):
