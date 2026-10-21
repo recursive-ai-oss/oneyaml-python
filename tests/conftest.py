@@ -17,7 +17,6 @@ HAS_NATIVE = "native" in BACKENDS
 # entry is deleted from this list).
 PURE_NOT_YET_IMPLEMENTED = {
     "test_load",
-    "test_events",
 }
 
 
