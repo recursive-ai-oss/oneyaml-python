@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
+from itertools import islice
 from typing import Any
 
 from .._errors import make_error
@@ -120,7 +121,7 @@ def prepare(value: Any, limits: Any) -> Prepared:
                         elif kind == "tag":
                             items = [x.value]
                         else:
-                            items = list(x)
+                            items = list(x) if type(x) in (list, tuple) else _drain(x)
                         runs = _leaf_run(items, digit_cap) if kind != "tag" else None
                         if runs is not None:
                             # Only plain scalars inside: no frame needed.
@@ -215,6 +216,19 @@ def _leaf_run(items: list, digit_cap: int | None) -> tuple[int, int] | None:
             if type(n) is int:
                 _check_digits(n, digit_cap)
     return len(items), size
+
+
+def _drain(seq: Any) -> list:
+    """The items of a sequence other than a list, read a chunk at a time: ``list()`` of a long
+    iterator is one call that cannot hear Ctrl-C, and the user's own sequence may be endless or
+    huge."""
+    it = iter(seq)
+    out: list = []
+    while True:
+        chunk = list(islice(it, 4096))
+        if not chunk:
+            return out
+        out += chunk
 
 
 def _flatten(items: Any) -> Any:

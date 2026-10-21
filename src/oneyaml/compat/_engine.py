@@ -12,8 +12,10 @@
   reached and may ask the loader for the value of any node below it.
 
 A loader that registers nothing never comes here (``pyyaml.py`` hands its text straight to the
-backend). One that only registers constructors tries the backend first and comes here when the
-document uses a tag the backend cannot build.
+backend). One that only registers constructors has the backend build the document and compose
+only the nodes a callback takes over (``_Hooks``); when the document is not one the backend can
+do that for, the whole document is composed. The native backend gives the composer its own events;
+the pure one gives it the ones it parsed.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import sys
 import types
 from typing import Any
 
+from .. import _api
 from .._errors import YAMLError as _BaseError
 from .._errors import make_error
 from .._limits import _NONE
@@ -295,25 +298,39 @@ class _Doc:
 
 
 def compose_documents(
-    loader: BaseResolver, data: str | bytes, name: str, multi: bool, limits: Any
+    loader: BaseResolver,
+    data: str | bytes,
+    name: str,
+    multi: bool,
+    limits: Any,
+    parsed: Any = None,
 ) -> list[_Doc]:
-    """Parse ``data`` and compose its documents into nodes.
+    """Parse ``data`` and compose its documents into nodes. ``parsed`` is what the pure backend
+    already made of ``data``, when it has.
 
     Raises the library's own errors (``YAMLError``) for bad input and for a document that goes
     past a limit; the caller turns them into PyYAML's."""
     depth, nf, nfloor, bf, bfloor, input_size, scalar_size, documents, _digits = limits._native
-    binary = isinstance(data, (bytes, bytearray, memoryview))
-    if input_size < _NONE and binary and len(data) > input_size:
-        raise make_error(f"the input is over the limit of {input_size} bytes", "limit")
-    text = decode(data)
-    if input_size < _NONE and not binary and _utf8_len(text) > input_size:
-        raise make_error(f"the input is over the limit of {input_size} bytes", "limit")
-    events = parse_events(text, sys.maxsize if depth >= _NONE else depth)
-    if scalar_size < _NONE or documents < _NONE:
-        try:
-            _check_sizes(events, scalar_size, documents)
-        except Fail as exc:
-            raise _error_at(text, exc) from None
+    native_events = getattr(_api._impl, "events", None)
+    if parsed is not None:
+        text, events = parsed.text, parsed.events
+    elif native_events is not None:
+        # The native backend reads the events itself, limits included.
+        events = native_events(data, limits)
+        text = decode(data)
+    else:
+        binary = isinstance(data, (bytes, bytearray, memoryview))
+        if input_size < _NONE and binary and len(data) > input_size:
+            raise make_error(f"the input is over the limit of {input_size} bytes", "limit")
+        text = decode(data)
+        if input_size < _NONE and not binary and _utf8_len(text) > input_size:
+            raise make_error(f"the input is over the limit of {input_size} bytes", "limit")
+        events = parse_events(text, sys.maxsize if depth >= _NONE else depth)
+        if scalar_size < _NONE or documents < _NONE:
+            try:
+                _check_sizes(events, scalar_size, documents)
+            except Fail as exc:
+                raise _error_at(text, exc) from None
     source = _Source(text, name)
     try:
         return _compose(
@@ -326,6 +343,59 @@ def compose_documents(
         )
     except Fail as exc:
         raise _error_at(text, exc) from None
+
+
+class _Hooks:
+    """What the native backend asks of a loader while it reads a document: which tags have a
+    constructor registered, and the value of a node it hands over as events."""
+
+    __slots__ = ("budget", "data", "depth", "loader", "source")
+
+    def __init__(self, loader: BaseConstructor, data: str | bytes, name: str, limits: Any) -> None:
+        depth, nf, nfloor, bf, bfloor, *_ = limits._native
+        self.loader = loader
+        self.data = data
+        self.source = None
+        self.depth = None if depth >= _NONE else depth
+        self.budget = (nf, nfloor, bf, bfloor)
+
+    def wants(self, tag: str) -> bool:
+        """Whether a node written with ``tag`` is built by a registered function (the standard
+        types are the backend's own)."""
+        fn, _ = self.loader._lookup_tag(tag)
+        if fn is None:
+            return False
+        try:
+            return fn not in _BUILTIN
+        except TypeError:  # a callable that cannot be hashed is a callback
+            return True
+
+    def build(self, events: list[tuple]) -> Any:
+        """The value of the node whose events these are."""
+        loader = self.loader
+        source = self.source
+        if source is None:
+            source = self.source = _Source(decode(self.data), loader.name)
+        at = events[0][1]
+        wrapped = [(DOC_START, at, at, False, None, None), *events, (DOC_END, at, at, False)]
+        try:
+            docs = _compose(loader, wrapped, source, False, self.depth, self.budget)
+        except Fail as exc:
+            raise _error_at(source.text, exc) from None
+        try:
+            return loader._build(docs[0])
+        except _BaseError as exc:
+            # Raised by a callback (it called the library itself): it reaches the caller as it
+            # is, neither converted to this stream's error type nor retried node by node.
+            raise Passthrough(exc) from None
+
+
+class Passthrough(Exception):
+    """Carries an error a callback raised through the backend's load unchanged."""
+
+    def __init__(self, error: _BaseError) -> None:
+        super().__init__()
+        self.error = error
 
 
 def _error_at(text: str, exc: Fail) -> _BaseError:
@@ -354,6 +424,8 @@ def _compose(  # noqa: C901
     docs: list[_Doc] = []
     doc: _Doc | None = None
     anchors: dict[str, Any] = {}
+    # What an alias to an anchored node is charged: nodes, bytes of text and height.
+    measures: dict[str, tuple] = {}
     # A frame per open collection: the node, its items so far, whether it is a mapping, the
     # nodes / bytes / height of what it holds, its anchor and the key waiting for its value.
     stack: list[list] = []
@@ -386,18 +458,25 @@ def _compose(  # noqa: C901
                     tag = resolve(ScalarNode, v, (False, True))
                 else:
                     tag = TAG_STR
-            node = ScalarNode(tag, v, None, None, None if style == ":" else style)
-            node._source = source
-            node._event = e
-            node._end = e[3]
-            node._implicit = implicit
+            node = ScalarNode(
+                tag,
+                v,
+                None,
+                None,
+                None if style == ":" else style,
+                source=source,
+                event=e,
+                end=e[3],
+                implicit=implicit,
+            )
             if paths:
                 loader.ascend_resolver()
+            size = len(v) if v.isascii() else len(v.encode("utf-8", "surrogatepass"))
+            measure = (1, size, 0)
             a = e[4]
             if a is not None:
                 anchors[a] = node
-            size = len(v) if v.isascii() else len(v.encode("utf-8", "surrogatepass"))
-            measure = (1, size, 0)
+                measures[a] = measure
         elif k == MAP_START or k == SEQ_START:  # noqa: SIM109
             is_map = k == MAP_START
             if paths:
@@ -406,11 +485,7 @@ def _compose(  # noqa: C901
             kind = MappingNode if is_map else SequenceNode
             if tag is None or tag == "!":
                 tag = resolve(kind, None, (True, False))
-            node = kind(tag, [], None, None, e[5])
-            node._source = source
-            node._event = e
-            node._end = e[1]
-            node._implicit = False
+            node = kind(tag, [], None, None, e[5], source=source, event=e, end=e[1])
             a = e[3]
             if a is not None:
                 anchors[a] = _OPEN
@@ -425,6 +500,7 @@ def _compose(  # noqa: C901
                 loader.ascend_resolver()
             if a is not None and anchors[a] is _OPEN:
                 anchors[a] = node
+                measures[a] = measure
         elif k == ALIAS:
             node = anchors.get(e[3])
             if node is _OPEN:
@@ -433,7 +509,7 @@ def _compose(  # noqa: C901
                 raise Fail("an alias to a merge key cannot be constructed", "construct", e[1])
             if node is None:
                 raise Fail(f"alias *{e[3]} has no anchor", "syntax", e[1])
-            nodes, size, height = node._measure
+            nodes, size, height = measures[e[3]]
             if depth is not None and len(stack) + height > depth:
                 raise Fail(f"alias nests deeper than the limit of {depth}", "limit", e[1])
             charged_nodes += nodes
@@ -449,6 +525,7 @@ def _compose(  # noqa: C901
             if docs and not multi:
                 raise Fail("the stream holds more than one document; use loads_all", "other", e[1])
             anchors = {}
+            measures = {}
             doc = _Doc(source, events)
             doc.anchors = anchors
             root = None
@@ -466,18 +543,16 @@ def _compose(  # noqa: C901
             continue
 
         # A node is complete: record its size and hand it to the collection it belongs to.
-        if k != ALIAS:
-            node._measure = measure
-            if (
-                k == SCALAR
-                and node.tag == TAG_MERGE
-                and merges
-                and stack
-                and stack[-1][2]
-                and stack[-1][7] is None
-            ):
-                # The key that merges; an alias to it would have no value to stand for.
-                node._merge_key = True
+        if (
+            k == SCALAR
+            and node.tag == TAG_MERGE
+            and merges
+            and stack
+            and stack[-1][2]
+            and stack[-1][7] is None
+        ):
+            # The key that merges; an alias to it would have no value to stand for.
+            node._merge_key = True
         if stack:
             frame = stack[-1]
             if frame[2]:
@@ -510,6 +585,7 @@ def _parent_of(stack: list[list]) -> tuple[Any, Any]:
 # ---- constructor -------------------------------------------------------------------------------
 
 _NO_DIGITS = re.compile(r"[-+]?0[bx]_*\Z").match
+_MISSING = object()
 
 
 class BaseConstructor:
@@ -531,6 +607,8 @@ class BaseConstructor:
         self._nesting = 0
         self._cap: int | None = None
         self._slow = False
+        # What is registered for each tag met in the document being built.
+        self._found: dict[str, tuple[Any, str | None] | None] = {}
 
     @classmethod
     def add_constructor(cls, tag, constructor):
@@ -757,12 +835,10 @@ class BaseConstructor:
         except Reject as exc:
             raise self._fail(Fail(exc.message, exc.category), node) from None
 
-    def _lookup(self, node: Node) -> tuple[Any, str | None]:
-        """The function that builds ``node`` and the tag suffix when a prefix matched. None for
-        no function at all: the node is read as the plain type of its kind."""
-        tag = node.tag
-        ctors = self.yaml_constructors
-        fn = ctors.get(tag)
+    def _registered(self, tag: str) -> tuple[Any, str | None] | None:
+        """The function registered for ``tag``: exact, then by prefix, then the catch-all prefix;
+        None when none of them is."""
+        fn = self.yaml_constructors.get(tag)
         if fn is not None:
             return fn, None
         for prefix, multi in self.yaml_multi_constructors.items():
@@ -770,6 +846,23 @@ class BaseConstructor:
                 return multi, tag[len(prefix) :]
         if None in self.yaml_multi_constructors:
             return self.yaml_multi_constructors[None], tag
+        return None
+
+    def _lookup_tag(self, tag: str) -> tuple[Any, str | None]:
+        """What builds a node of ``tag``, as ``_lookup`` finds it for a node that was written
+        with that tag."""
+        return self._registered(tag) or (self.yaml_constructors.get(None), None)
+
+    def _lookup(self, node: Node) -> tuple[Any, str | None]:
+        """The function that builds ``node`` and the tag suffix when a prefix matched. None for
+        no function at all: the node is read as the plain type of its kind."""
+        tag = node.tag
+        found = self._found.get(tag, _MISSING)
+        if found is _MISSING:
+            found = self._found[tag] = self._registered(tag)
+        if found is not None:
+            return found
+        ctors = self.yaml_constructors
         if (
             self._merges
             and tag in (TAG_MERGE, TAG_VALUE)

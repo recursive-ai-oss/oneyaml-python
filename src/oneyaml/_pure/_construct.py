@@ -66,11 +66,24 @@ _COLLECTIONS = (list, tuple, dict, FrozenMapping, Tagged, set, frozenset)
 _UNFROZEN = (list, dict, Tagged)
 
 
-def load(data: Any, limits: Any, multi: bool, schema: str = "core") -> Any:
-    """The value of the single document in ``data`` (``multi=False``) or a list of every
-    document (``multi=True``). ``limits`` is a ``Limits``. ``schema`` is ``"core"`` (YAML 1.2),
-    ``"yaml11"`` (the rules of PyYAML's safe loader) or ``"text"`` (every scalar a string,
-    tags ignored)."""
+class Parsed:
+    """A parsed stream: its text, its events and what building values from them needs.
+
+    Parsing and building are separate steps so that a caller whose build fails can compose the
+    same events another way without reading the text again."""
+
+    __slots__ = ("args", "events", "text")
+
+    def __init__(self, text: str, events: list[tuple], args: tuple) -> None:
+        self.text = text
+        self.events = events
+        self.args = args
+
+
+def parse(data: Any, limits: Any, schema: str = "core", multi: bool = True) -> Parsed:
+    """Read ``data`` into events, checking the limits that need only the events. ``schema`` and
+    ``multi`` are as for ``load``: a duplicate key or an alias bomb that comes before a syntax
+    error is reported first, which takes a build of the events read so far."""
     if schema not in _SCHEMAS:
         raise ValueError(f"unknown schema {schema!r}")
     depth, nf, nfloor, bf, bfloor, input_size, scalar_size, documents, digits = limits._native
@@ -81,7 +94,6 @@ def load(data: Any, limits: Any, multi: bool, schema: str = "core") -> Any:
     if input_size < _NONE and not binary and _utf8_len(text) > input_size:
         raise make_error(f"the input is over the limit of {input_size} bytes", "limit")
     args = (
-        multi,
         None if digits >= _NONE else digits,
         None if depth >= _NONE else depth,
         (nf, nfloor, bf, bfloor),
@@ -95,18 +107,39 @@ def load(data: Any, limits: Any, multi: bool, schema: str = "core") -> Any:
             # that comes before the syntax error first.
             raw = exc.__dict__.pop("raw_events", None)
             if raw:
-                _build(text, raw, *args, partial=True, schema=schema)
+                _build(text, raw, multi, *args, partial=True, schema=schema)
             raise
         if scalar_size < _NONE or documents < _NONE:
             _check_sizes(events, scalar_size, documents)
-        docs = _build(text, events, *args, schema=schema)
     except Fail as exc:
-        off = exc.offset
-        line, col = linecol(text, 0 if off is None else off)
-        raise make_error(exc.message, exc.category, line, col, off) from None
+        raise _fail_error(text, exc) from None
+    return Parsed(text, events, args)
+
+
+def build(parsed: Parsed, multi: bool, schema: str = "core") -> Any:
+    """The value of the single document of ``parsed`` (``multi=False``) or a list of every
+    document (``multi=True``)."""
+    try:
+        docs = _build(parsed.text, parsed.events, multi, *parsed.args, schema=schema)
+    except Fail as exc:
+        raise _fail_error(parsed.text, exc) from None
     if multi:
         return docs
     return docs[0] if docs else None
+
+
+def _fail_error(text: str, exc: Fail) -> YAMLError:
+    off = exc.offset
+    line, col = linecol(text, 0 if off is None else off)
+    return make_error(exc.message, exc.category, line, col, off)
+
+
+def load(data: Any, limits: Any, multi: bool, schema: str = "core") -> Any:
+    """The value of the single document in ``data`` (``multi=False``) or a list of every
+    document (``multi=True``). ``limits`` is a ``Limits``. ``schema`` is ``"core"`` (YAML 1.2),
+    ``"yaml11"`` (the rules of PyYAML's safe loader) or ``"text"`` (every scalar a string,
+    tags ignored)."""
+    return build(parse(data, limits, schema, multi), multi, schema)
 
 
 def _check_sizes(events: list[tuple], scalar_size: int, documents: int) -> None:

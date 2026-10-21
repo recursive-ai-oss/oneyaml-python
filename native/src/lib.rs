@@ -12,9 +12,11 @@ mod document;
 mod errors;
 mod events;
 mod hook;
+mod hybrid;
 mod input;
 mod limits;
 mod ops;
+mod pyevents;
 mod pyvalue;
 mod reader;
 mod scalar;
@@ -88,6 +90,30 @@ fn events_text<'py>(
     guarded(py, || events::events_text(py, data))
 }
 
+/// The event stream as the tuples the pure parser produces, for the node composer of the
+/// PyYAML loaders.
+#[pyfunction]
+#[pyo3(name = "events")]
+fn py_events<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    limits: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, pyo3::types::PyList>> {
+    guarded(py, || pyevents::events(py, data, limits))
+}
+
+/// A YAML 1.1 load in which registered constructors build some nodes: `(value,)`, or None when
+/// the caller has to read the document node by node.
+#[pyfunction]
+fn load_hooked<'py>(
+    py: Python<'py>,
+    data: &Bound<'py, PyAny>,
+    limits: &Bound<'py, PyAny>,
+    hooks: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, pyo3::types::PyTuple>>> {
+    guarded(py, || hybrid::load_hooked(py, data, limits, hooks))
+}
+
 /// Run the engine over `data` and count its events, building nothing. This is what a load costs
 /// before any Python object exists; the benchmarks use it to size the cost of building them.
 #[pyfunction]
@@ -123,6 +149,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<document::Handle>()?;
     m.add_class::<document::Prepared>()?;
     m.add_function(wrap_pyfunction!(events_text, m)?)?;
+    m.add_function(wrap_pyfunction!(py_events, m)?)?;
+    m.add_function(wrap_pyfunction!(load_hooked, m)?)?;
     m.add_function(wrap_pyfunction!(_parse_only, m)?)?;
     m.add_function(wrap_pyfunction!(_panic_probe, m)?)?;
     m.add_function(wrap_pyfunction!(_test_hook, m)?)?;

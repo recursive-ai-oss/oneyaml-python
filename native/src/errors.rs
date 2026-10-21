@@ -5,6 +5,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use oneyaml::{ColumnUnit, Diagnostic, LineIndex, code};
 use oneyaml_syntax::event::{Event, Sourced};
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
@@ -20,6 +21,9 @@ pub enum Fail {
         at: Option<usize>,
     },
     Py(PyErr),
+    /// Not a failure: a hooked load found it cannot build this document as it reads it, and the
+    /// caller reads it node by node instead.
+    Fallback,
 }
 
 impl From<PyErr> for Fail {
@@ -91,6 +95,7 @@ pub fn locate(text: &str, at: usize) -> Option<(usize, usize, usize)> {
 pub fn to_pyerr(py: Python<'_>, text: &str, fail: Fail, events: Option<Vec<String>>) -> PyErr {
     match fail {
         Fail::Py(e) => e,
+        Fail::Fallback => PyRuntimeError::new_err("internal error: a fallback signal escaped"),
         Fail::Yaml {
             category,
             message,
