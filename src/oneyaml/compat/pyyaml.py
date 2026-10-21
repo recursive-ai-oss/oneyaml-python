@@ -1,4 +1,4 @@
-"""A drop-in for PyYAML's loading functions: ``import oneyaml.compat.pyyaml as yaml``.
+"""A drop-in for PyYAML: ``import oneyaml.compat.pyyaml as yaml``, loading and dumping.
 
 The names, arguments and results are PyYAML's: YAML 1.1 scalars (``yes``, ``0o``-less octal,
 base-60 numbers, dates), merge keys, the last of a repeated key, ``!!set``/``!!omap``/``!!binary``,
@@ -33,14 +33,40 @@ Where callbacks differ from PyYAML:
 * A mapping key that is a list or a mapping is frozen (tuple, ``FrozenMapping``), not refused.
 * Replacing ``construct_object``, ``construct_sequence`` or ``construct_mapping`` in a subclass
   works, but nested calls through them are limited to 100 levels (a ``limit`` error).
-* ``add_representer`` and the ``Dumper`` arguments of the registration functions have no effect
-  until the dump side exists; ``YAMLObject.to_yaml`` raises ``NotImplementedError``.
 * ``!!python/...`` tags are never built, whatever the loader; a constructor registered for one
   by the program is called.
+
+Dumping: ``dump``, ``dump_all``, ``safe_dump`` and ``safe_dump_all`` take every PyYAML keyword
+(``default_flow_style``, ``default_style``, ``canonical``, ``indent``, ``width``,
+``allow_unicode``, ``line_break``, ``encoding``, ``explicit_start``, ``explicit_end``,
+``version``, ``tags``, ``sort_keys``, ``Dumper``, ``stream``) and write PyYAML's layout, byte for
+byte. The ``Dumper`` classes, ``add_representer``, ``add_multi_representer``, ``represent_*``,
+``YAMLObject.to_yaml`` and ``yaml_dumper`` work as in PyYAML, with the same class-scoped tables;
+``add_implicit_resolver`` and ``add_path_resolver`` without a ``Dumper`` also reach ``Dumper``.
+Plain lists, dicts, strings, numbers and ``None`` are written by the active backend; anything
+else goes through the representers, and both routes give the same bytes. Where dumping differs
+from PyYAML, because PyYAML's output there changes the data or cannot be read as YAML 1.2:
+
+* With ``allow_unicode``, U+0085, U+2028 and U+2029 are escaped in double quotes. PyYAML writes
+  them raw in single quotes, and a reader folds them to spaces.
+* A ``width`` smaller than the indentation folds once after an escape followed by a space.
+  PyYAML folds twice and writes a ``\\`` line that reads back as a backslash.
+* A root block scalar (``default_style`` ``|`` or ``>``) that starts with white space is quoted:
+  YAML 1.2 readers put root content one column left of where PyYAML expects it.
+* ``version`` or ``tags`` on a document after the first is preceded by ``...``, whatever the
+  previous document was; otherwise a conforming reader refuses the directive.
+* ``encoding='utf-16'`` writes one byte order mark; PyYAML repeats it for every write.
+* ``CDumper`` and ``CSafeDumper`` use the layout of ``Dumper`` and ``SafeDumper``, not libyaml's.
+* ``SafeDumper`` refuses ``!!python/...`` objects as PyYAML does; ``Dumper`` writes them as
+  PyYAML does, but this package's loaders will not read them back.
+* Representer callbacks that call back into ``represent_data`` nest at most 100 levels (a
+  ``RepresenterError`` with category ``limit``); deeply nested plain values are written without
+  recursion.
 """
 
 from __future__ import annotations
 
+import io
 import re
 import sys
 import types
@@ -50,6 +76,19 @@ from .. import _api
 from .._errors import YAMLError as _BaseError
 from .._limits import _NONE
 from . import _engine
+from ._dump import (
+    BaseDumper,
+    BaseRepresenter,
+    CBaseDumper,
+    CDumper,
+    CSafeDumper,
+    Dumper,
+    Emitter,
+    Representer,
+    SafeDumper,
+    SafeRepresenter,
+    Serializer,
+)
 from ._engine import (
     BaseConstructor,
     BaseResolver,
@@ -64,17 +103,25 @@ from ._nodes import CollectionNode, MappingNode, Node, ScalarNode, SequenceNode
 
 __all__ = [
     "BaseConstructor",
+    "BaseDumper",
     "BaseLoader",
+    "BaseRepresenter",
     "BaseResolver",
+    "CBaseDumper",
     "CBaseLoader",
+    "CDumper",
     "CFullLoader",
     "CLoader",
+    "CSafeDumper",
     "CSafeLoader",
     "CUnsafeLoader",
     "CollectionNode",
     "ComposerError",
     "Constructor",
     "ConstructorError",
+    "Dumper",
+    "Emitter",
+    "EmitterError",
     "FullConstructor",
     "FullLoader",
     "Loader",
@@ -84,13 +131,19 @@ __all__ = [
     "Node",
     "ParserError",
     "ReaderError",
+    "Representer",
+    "RepresenterError",
     "Resolver",
     "ResolverError",
     "SafeConstructor",
+    "SafeDumper",
     "SafeLoader",
+    "SafeRepresenter",
     "ScalarNode",
     "ScannerError",
     "SequenceNode",
+    "Serializer",
+    "SerializerError",
     "UnsafeConstructor",
     "UnsafeLoader",
     "YAMLError",
@@ -101,13 +154,19 @@ __all__ = [
     "add_constructor",
     "add_implicit_resolver",
     "add_multi_constructor",
+    "add_multi_representer",
     "add_path_resolver",
+    "add_representer",
     "compose",
     "compose_all",
+    "dump",
+    "dump_all",
     "full_load",
     "full_load_all",
     "load",
     "load_all",
+    "safe_dump",
+    "safe_dump_all",
     "safe_load",
     "safe_load_all",
     "unsafe_load",
@@ -232,6 +291,24 @@ class ComposerError(MarkedYAMLError):
 
 class ConstructorError(MarkedYAMLError):
     pass
+
+
+class EmitterError(YAMLError):
+    """The writer was given something it cannot write (a bad tag, anchor or version)."""
+
+
+class SerializerError(YAMLError):
+    """The serializer was used out of order."""
+
+
+class RepresenterError(YAMLError):
+    """A value has no representer (``safe_dump`` of an object of an unknown class, say)."""
+
+    def __init__(self, message: str = "", *args: Any, **kw: Any) -> None:
+        super().__init__(message, **kw)
+        if args:
+            # PyYAML's exception carries the offending object as a second argument.
+            self.args = (message, *args)
 
 
 # Both backends word an unknown or self-containing alias their own way.
@@ -577,6 +654,83 @@ def unsafe_load_all(stream: Any):
     return load_all(stream, UnsafeLoader)
 
 
+# ---- dumping -----------------------------------------------------------------------------------
+
+
+def dump_all(  # noqa: N803
+    documents: Any,
+    stream: Any = None,
+    Dumper: Any = Dumper,
+    default_style: Any = None,
+    default_flow_style: Any = False,
+    canonical: Any = None,
+    indent: Any = None,
+    width: Any = None,
+    allow_unicode: Any = None,
+    line_break: Any = None,
+    encoding: Any = None,
+    explicit_start: Any = None,
+    explicit_end: Any = None,
+    version: Any = None,
+    tags: Any = None,
+    sort_keys: Any = True,
+) -> Any:
+    """Write each of ``documents`` to ``stream`` as one YAML stream; with no stream, the text
+    (or the bytes when ``encoding`` is given) is returned."""
+    getvalue = None
+    if stream is None:
+        stream = io.StringIO() if encoding is None else io.BytesIO()
+        getvalue = stream.getvalue
+    dumper = Dumper(
+        stream,
+        default_style=default_style,
+        default_flow_style=default_flow_style,
+        canonical=canonical,
+        indent=indent,
+        width=width,
+        allow_unicode=allow_unicode,
+        line_break=line_break,
+        encoding=encoding,
+        version=version,
+        tags=tags,
+        explicit_start=explicit_start,
+        explicit_end=explicit_end,
+        sort_keys=sort_keys,
+    )
+    try:
+        dumper.open()
+        for data in documents:
+            dumper.represent(data)
+        dumper.close()
+    except RecursionError as exc:
+        # Only a representer that calls itself through the nesting of the value gets here: the
+        # library's own walk keeps an explicit stack.
+        raise RepresenterError(
+            "the value nests too deeply for the representers that were registered",
+            category="limit",
+        ) from exc
+    finally:
+        dumper.dispose()
+    if getvalue:
+        return getvalue()
+    return None
+
+
+def dump(data: Any, stream: Any = None, Dumper: Any = Dumper, **kwds: Any) -> Any:  # noqa: N803
+    """Write ``data`` as one YAML document (see :func:`dump_all` for the keywords)."""
+    return dump_all([data], stream, Dumper=Dumper, **kwds)
+
+
+def safe_dump_all(documents: Any, stream: Any = None, **kwds: Any) -> Any:
+    """Like :func:`dump_all` with the standard tags only."""
+    return dump_all(documents, stream, Dumper=SafeDumper, **kwds)
+
+
+def safe_dump(data: Any, stream: Any = None, **kwds: Any) -> Any:
+    """Like :func:`dump` with the standard tags only."""
+    return dump_all([data], stream, Dumper=SafeDumper, **kwds)
+
+
 # ---- registering callbacks ---------------------------------------------------------------------
 
 # What ``add_constructor`` and the others reach when no loader is named: PyYAML's three loaders
@@ -603,20 +757,36 @@ def add_multi_constructor(  # noqa: N803
 
 
 def add_implicit_resolver(  # noqa: N803
-    tag: str, regexp: Any, first: Any = None, Loader: Any = None, Dumper: Any = None
+    tag: str, regexp: Any, first: Any = None, Loader: Any = None, Dumper: Any = Dumper
 ) -> None:
     """Give plain scalars that match ``regexp`` (and begin with a character of ``first``) the
-    tag ``tag``. ``Dumper`` is accepted for PyYAML's signature and has no effect yet."""
+    tag ``tag``: when loading, and when dumping with ``Dumper`` (a string that matches is
+    then written quoted, so it reads back as a string)."""
     for cls in _DEFAULT_LOADERS if Loader is None else (Loader,):
         cls.add_implicit_resolver(tag, regexp, first)
+    if Dumper is not None:
+        Dumper.add_implicit_resolver(tag, regexp, first)
 
 
 def add_path_resolver(  # noqa: N803
-    tag: str, path: Any, kind: Any = None, Loader: Any = None, Dumper: Any = None
+    tag: str, path: Any, kind: Any = None, Loader: Any = None, Dumper: Any = Dumper
 ) -> None:
-    """Give the node at ``path`` the tag ``tag``. ``Dumper`` has no effect yet."""
+    """Give the node at ``path`` the tag ``tag``, when loading and when dumping."""
     for cls in _DEFAULT_LOADERS if Loader is None else (Loader,):
         cls.add_path_resolver(tag, path, kind)
+    if Dumper is not None:
+        Dumper.add_path_resolver(tag, path, kind)
+
+
+def add_representer(data_type: Any, representer: Any, Dumper: Any = Dumper) -> None:  # noqa: N803
+    """Write objects of exactly ``data_type`` with ``representer(dumper, data)``, which returns a
+    node (``dumper.represent_scalar``, ``represent_sequence`` or ``represent_mapping``)."""
+    Dumper.add_representer(data_type, representer)
+
+
+def add_multi_representer(data_type: Any, representer: Any, Dumper: Any = Dumper) -> None:  # noqa: N803
+    """Write objects of ``data_type`` and of its subclasses with ``representer``."""
+    Dumper.add_multi_representer(data_type, representer)
 
 
 def compose(stream: Any, Loader: Any = Loader) -> Any:  # noqa: N803
@@ -639,7 +809,8 @@ def compose_all(stream: Any, Loader: Any = Loader):  # noqa: N803
 
 
 class YAMLObjectMetaclass(type):
-    """Registers a ``YAMLObject`` class with the loaders it names when it is defined."""
+    """Registers a ``YAMLObject`` class with the loaders and the dumper it names when it is
+    defined."""
 
     def __init__(cls, name: str, bases: tuple, kwds: dict) -> None:
         super().__init__(name, bases, kwds)
@@ -647,17 +818,15 @@ class YAMLObjectMetaclass(type):
             loaders = cls.yaml_loader if isinstance(cls.yaml_loader, list) else [cls.yaml_loader]
             for loader in loaders:
                 loader.add_constructor(cls.yaml_tag, cls.from_yaml)
-            # Writing objects waits for the dump side; a dumper that exists takes the class.
-            dumper = cls.yaml_dumper
-            if dumper is not None and hasattr(dumper, "add_representer"):
-                dumper.add_representer(cls, cls.to_yaml)
+            cls.yaml_dumper.add_representer(cls, cls.to_yaml)
 
 
 class YAMLObject(metaclass=YAMLObjectMetaclass):
-    """A class that reads itself from the tag ``yaml_tag``: subclass it and set the tag."""
+    """A class that reads and writes itself with the tag ``yaml_tag``: subclass it and set the
+    tag."""
 
     yaml_loader: Any = [Loader, FullLoader, UnsafeLoader]  # noqa: RUF012 (PyYAML's own shape)
-    yaml_dumper: Any = None
+    yaml_dumper: Any = Dumper
     yaml_tag: str | None = None
     yaml_flow_style: bool | None = None
 
@@ -668,7 +837,8 @@ class YAMLObject(metaclass=YAMLObjectMetaclass):
 
     @classmethod
     def to_yaml(cls, dumper: Any, data: Any) -> Any:
-        raise NotImplementedError("writing objects is not available in this module yet")
+        """The mapping node for ``data``: its attributes under ``yaml_tag``."""
+        return dumper.represent_yaml_object(cls.yaml_tag, data, cls, flow_style=cls.yaml_flow_style)
 
 
 # PyYAML spreads these over submodules; code reaches them as ``yaml.nodes.ScalarNode`` and the
@@ -709,3 +879,18 @@ loader = _namespace(
     UnsafeLoader=UnsafeLoader,
     Loader=Loader,
 )
+dumper = _namespace(
+    "dumper",
+    BaseDumper=BaseDumper,
+    SafeDumper=SafeDumper,
+    Dumper=Dumper,
+)
+representer = _namespace(
+    "representer",
+    BaseRepresenter=BaseRepresenter,
+    SafeRepresenter=SafeRepresenter,
+    Representer=Representer,
+    RepresenterError=RepresenterError,
+)
+emitter = _namespace("emitter", Emitter=Emitter, EmitterError=EmitterError)
+serializer = _namespace("serializer", Serializer=Serializer, SerializerError=SerializerError)

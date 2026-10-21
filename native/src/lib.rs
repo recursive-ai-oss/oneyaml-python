@@ -16,6 +16,7 @@ mod hybrid;
 mod input;
 mod limits;
 mod ops;
+mod pydump;
 mod pyevents;
 mod pyvalue;
 mod reader;
@@ -72,6 +73,35 @@ fn dump<'py>(
 ) -> PyResult<Bound<'py, pyo3::types::PyString>> {
     let _ = multi;
     guarded(py, || writer::dump(py, objs, opts))
+}
+
+/// The body of one document in PyYAML's layout, or None when the value needs the general
+/// writer (see `pydump`).
+#[pyfunction]
+#[pyo3(signature = (obj, marker, best_indent, best_width, allow_unicode, sort_keys, line_break))]
+#[allow(clippy::too_many_arguments)]
+fn pyyaml_body<'py>(
+    py: Python<'py>,
+    obj: &Bound<'py, PyAny>,
+    marker: bool,
+    best_indent: usize,
+    best_width: usize,
+    allow_unicode: bool,
+    sort_keys: bool,
+    line_break: &str,
+) -> PyResult<Option<(Bound<'py, pyo3::types::PyString>, bool)>> {
+    guarded(py, || {
+        pydump::body(
+            py,
+            obj,
+            marker,
+            best_indent,
+            best_width,
+            allow_unicode,
+            sort_keys,
+            line_break,
+        )
+    })
 }
 
 /// Operations on the dump's on-path set since the last reset (a test reads it to check that
@@ -144,6 +174,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(probe, m)?)?;
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_function(wrap_pyfunction!(dump, m)?)?;
+    m.add_function(wrap_pyfunction!(pyyaml_body, m)?)?;
     m.add_function(wrap_pyfunction!(_dump_path_ops, m)?)?;
     m.add_function(wrap_pyfunction!(document::parse, m)?)?;
     m.add_class::<document::Handle>()?;

@@ -302,7 +302,7 @@ fn no_memory() -> PyErr {
 
 /// Make room for `n` more bytes; the pushes that follow cannot reallocate.
 #[inline(always)]
-fn reserve(out: &mut String, n: usize) -> PyResult<()> {
+pub(crate) fn reserve(out: &mut String, n: usize) -> PyResult<()> {
     if out.capacity() - out.len() >= n {
         return Ok(());
     }
@@ -707,7 +707,7 @@ fn push_u64(out: &mut String, mut n: u64) {
     out.push_str(std::str::from_utf8(&buf[i..]).unwrap_or("0"));
 }
 
-fn push_int(out: &mut String, v: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn push_int(out: &mut String, v: &Bound<'_, PyAny>) -> PyResult<()> {
     reserve(out, 25)?;
     if let Ok(n) = v.extract::<i64>() {
         if n < 0 {
@@ -787,7 +787,7 @@ fn maybe_tie(f: f64, n: usize) -> bool {
 /// Rust picks the other one. `maybe_tie` finds exactly those values (it needs a shortest form
 /// of 15 or more digits); for them the interpreter itself writes the digits, so the two
 /// writers cannot differ.
-fn push_float(out: &mut String, f: f64, obj: &Bound<'_, PyAny>) -> PyResult<()> {
+pub(crate) fn push_float(out: &mut String, f: f64, obj: &Bound<'_, PyAny>) -> PyResult<()> {
     use std::fmt::Write;
     reserve(out, 33)?;
     if f.is_nan() {
@@ -994,7 +994,7 @@ fn tag_text(tag: &str) -> PyResult<String> {
 }
 
 /// Let a pending signal (Ctrl-C) end the dump: it surfaces as the usual `KeyboardInterrupt`.
-fn poll_signals(py: Python<'_>) -> PyResult<()> {
+pub(crate) fn poll_signals(py: Python<'_>) -> PyResult<()> {
     if hook::take(hook::INTERRUPT) {
         // The test switch stands in for a Ctrl-C: `interrupt_main` raises SIGINT in this
         // process as the interpreter's own signal handling would.

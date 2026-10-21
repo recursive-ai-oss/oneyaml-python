@@ -489,7 +489,7 @@ fn sexagesimal(neg: bool, rest: &str, first: u8) -> Plain11 {
 
 /// `dddd-dd-dd`, or `dddd-d?d-d?d` then `T`/`t`/blanks, `d?d:dd:dd`, an optional fraction and an
 /// optional zone (`Z` or `+h?h[:mm]`, blanks allowed before it).
-fn is_timestamp(b: &[u8]) -> bool {
+pub(crate) fn is_timestamp(b: &[u8]) -> bool {
     let d = |i: usize| b.get(i).is_some_and(u8::is_ascii_digit);
     if !(d(0) && d(1) && d(2) && d(3) && b.get(4) == Some(&b'-')) {
         return false;
