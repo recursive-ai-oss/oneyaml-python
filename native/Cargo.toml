@@ -1,0 +1,35 @@
+[package]
+name = "oneyaml-native"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Native backend of the oneyaml Python package"
+build = "build.rs"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.30", features = ["extension-module"] }
+# The parsing engine.
+oneyaml = { git = "https://github.com/recursive-ai-oss/oneyaml-rust", rev = "93e9e30f99c60d583f195dad1b4e9b51b37ddc1e" } # pinned engine revision
+
+[profile.dev]
+# Fast to build and fast enough to test: our crate lightly optimised,
+# dependencies (the parser) more so, since debug-built parsing is very slow.
+opt-level = 1
+incremental = true
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
+strip = true

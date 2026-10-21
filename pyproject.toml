@@ -1,0 +1,47 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "oneyaml"
+version = "0.1.0.dev0"
+description = "A YAML 1.2 library with a native and a pure-Python backend"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
+requires-python = ">=3.10"
+# No runtime dependencies: the native module is bundled in the wheel.
+dependencies = []
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Typing :: Typed",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-xdist>=3.6",
+    "ruff>=0.9",
+    "maturin>=1.9,<2",
+]
+
+[tool.maturin]
+# The Python sources live in src/ and the extension is the submodule
+# oneyaml._native, built from the crate in native/.
+python-source = "src"
+module-name = "oneyaml._native"
+manifest-path = "native/Cargo.toml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]

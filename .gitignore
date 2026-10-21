@@ -1,0 +1,51 @@
+# Public repository: allowlist.
+#
+# Everything at the top level is ignored unless it is listed below, so a new
+# file stays out of the repository until someone deliberately adds it here.
+/*
+!/.gitignore
+!/.github/
+!/pyproject.toml
+!/README.md
+!/LICENSE-APACHE
+!/LICENSE-MIT
+!/src/
+!/native/
+!/tests/
+!/tools/
+
+# Never commit these anywhere in the tree.
+target/
+dist/
+build/
+wheels/
+*.so
+*.pyd
+*.dylib
+*.dll
+*.whl
+*.egg-info/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+core
+core.[0-9]*
+vgcore.*
+*.core
+*.out
+*.prof
+*.pprof
+cpu.*
+mem.*
+perf.data*
+.env
+.env.*
+*.pem
+*.key
+*.swp
+*~
+.DS_Store
