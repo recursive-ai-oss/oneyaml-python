@@ -591,51 +591,35 @@ class Document(_Node):
 
         ``path`` is an RFC 6901 pointer (``"/spec/containers/0/image"``) or a sequence of keys
         and indices, the form validation libraries report errors in (``("spec", "containers",
-        0, "image")``). For a mapping value this is the place where the value starts; a
-        block collection starts at its first entry. Lines and columns are 1-based, as in
+        0, "image")``). It is the place where the node starts: for a mapping value, where the
+        value starts (a block collection under a key starts at its first entry, or at its
+        anchor or tag when it has one). Lines and columns are 1-based, as in
         :class:`YAMLError`. A missing path raises ``KeyError`` or ``IndexError``, as :meth:`at`
         does.
         """
         d = self._d if document is None else document
         if isinstance(d, bool) or not isinstance(d, int):
             raise TypeError(f"document must be an integer, not {type(d).__name__}")
+        if isinstance(path, str):
+            _check_pointer(path)
+            steps = None
+        else:
+            if isinstance(path, (bytes, bytearray)) or not isinstance(path, Iterable):
+                raise TypeError(
+                    f"a path is a pointer or a sequence of keys, not {type(path).__name__}"
+                )
+            # The caller's own iterable is read, and its keys checked, before the stream's
+            # lock is taken: nothing of theirs runs while another thread waits for it.
+            steps = [_token(key) for key in path]
         h = self._core.h
-        if not 0 <= d < h.count():
-            raise IndexError("document index out of range")
         with self._core.lock:
-            if isinstance(path, str):
-                _check_pointer(path)
+            if not 0 <= d < h.count():
+                raise IndexError("document index out of range")
+            if steps is None:
                 steps = list(h.resolve(d, path))
-            else:
-                if isinstance(path, (bytes, bytearray)) or not isinstance(path, Iterable):
-                    raise TypeError(
-                        f"a path is a pointer or a sequence of keys, not {type(path).__name__}"
-                    )
-                steps = self._steps(h, d, path)
+            # One walk down the document: a sequence step takes an index (a negative one counts
+            # from the end), a mapping step the exact key.
             return Location(*h.locate(d, steps))
-
-    @staticmethod
-    def _steps(h: Any, d: int, path: Iterable[Any]) -> list:
-        """The backend tokens for keys and indices: an index into a sequence (negative counts
-        from the end) becomes its text, a key stays exact, as a view reads it."""
-        steps: list = []
-        for key in path:
-            kind = h.kind(d, steps)
-            if kind == "mapping":
-                steps.append(_token(key))
-            elif kind == "sequence":
-                if isinstance(key, str) and key.isascii() and key.isdigit():
-                    key = int(key)
-                if isinstance(key, bool) or not isinstance(key, int):
-                    raise KeyError(key)
-                if key < 0:
-                    key += h.length(d, steps)
-                    if key < 0:
-                        raise IndexError("sequence index out of range")
-                steps.append(str(key))
-            else:
-                raise KeyError(key)
-        return steps
 
     def patch(self, ops: Any, *, document: int | None = None) -> None:
         """Apply an RFC 6902 patch, all or nothing.

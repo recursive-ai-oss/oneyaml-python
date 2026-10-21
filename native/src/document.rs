@@ -286,6 +286,17 @@ fn seq_index(tok: &Tok) -> Option<usize> {
 
 /// Walk `toks` from the root. Reads follow aliases; an edit refuses to pass through one.
 fn walk<'d>(doc: &'d Document, toks: &[Tok], follow: bool) -> Result<NodeRef<'d>, Miss> {
+    walk_from_end(doc, toks, follow, false)
+}
+
+/// `walk`, where `from_end` lets a negative integer count a sequence from its end (as a Python
+/// list does).
+fn walk_from_end<'d>(
+    doc: &'d Document,
+    toks: &[Tok],
+    follow: bool,
+    from_end: bool,
+) -> Result<NodeRef<'d>, Miss> {
     let mut node = doc.root().ok_or(Miss::NoRoot)?;
     for tok in toks {
         if node.kind() == NodeKind::Alias {
@@ -301,7 +312,13 @@ fn walk<'d>(doc: &'d Document, toks: &[Tok], follow: bool) -> Result<NodeRef<'d>
             },
             NodeKind::Sequence => {
                 let s = node.as_sequence().ok_or_else(|| Miss::Key(tok.shown()))?;
-                let Some(i) = seq_index(tok) else {
+                let counted_back = match tok {
+                    Tok::Int(i) if from_end && *i < 0 => s
+                        .len()
+                        .checked_sub(usize::try_from(i.unsigned_abs()).unwrap_or(usize::MAX)),
+                    _ => None,
+                };
+                let Some(i) = seq_index(tok).or(counted_back) else {
                     return Err(seq_miss(tok, s.len()));
                 };
                 match s.get(i) {
@@ -315,19 +332,183 @@ fn walk<'d>(doc: &'d Document, toks: &[Tok], follow: bool) -> Result<NodeRef<'d>
     Ok(node)
 }
 
-/// The comment a node owns, as written: its trailing comments, else its leading ones. A mapping
-/// entry keeps its comments with its key, so the value of an entry reads them there; the root
-/// also has the document's header.
+/// The indentation of the block that holds the block scalar whose indicator (`|` or `>`) is at
+/// `at`: the column of the mapping key or of the `-` the scalar follows, -1 at the top of a
+/// document. Read from the text of the header line, which is all it takes.
+fn block_parent_indent(text: &str, at: usize) -> i64 {
+    let mut ls = text[..at].rfind(['\n', '\r']).map_or(0, |i| i + 1);
+    if ls == 0 && text.starts_with('\u{feff}') {
+        ls = '\u{feff}'.len_utf8();
+    }
+    let line = &text[ls..at];
+    let lb = line.as_bytes();
+    if line.starts_with("---") && lb.get(3).is_none_or(|c| matches!(c, b' ' | b'\t')) {
+        return -1;
+    }
+    let mut p = 0;
+    let mut last = -1;
+    loop {
+        while lb.get(p) == Some(&b' ') {
+            p += 1;
+        }
+        match lb.get(p) {
+            Some(b'-' | b'?' | b':') if lb.get(p + 1).is_none_or(|c| matches!(c, b' ' | b'\t')) => {
+                last = line[..p].chars().count() as i64;
+                p += 1;
+            }
+            _ => break,
+        }
+    }
+    // Only properties between the indicators and the scalar: the scalar is the item itself.
+    if line[p..]
+        .split_whitespace()
+        .all(|t| t.starts_with('&') || t.starts_with('!'))
+    {
+        return last;
+    }
+    line[..p].chars().count() as i64
+}
+
+/// Where a block scalar ends: just after its last content character. The spaces that make up the
+/// indentation of a trailing line, and the line breaks, are not content; the scalar's own
+/// header is its end when it has no content at all. `at` is the position of its indicator.
+fn block_scalar_end(text: &str, at: usize) -> usize {
+    let b = text.as_bytes();
+    let mut i = at + 1;
+    let mut digit = 0usize;
+    let mut taken = 0;
+    while taken < 2 {
+        match b.get(i) {
+            Some(c @ b'1'..=b'9') if digit == 0 => digit = usize::from(c - b'0'),
+            Some(b'+' | b'-') => {}
+            _ => break,
+        }
+        i += 1;
+        taken += 1;
+    }
+    let header_end = i;
+    let line_end = |from: usize| {
+        text[from..]
+            .find(['\n', '\r'])
+            .map_or(text.len(), |k| from + k)
+    };
+    let next_line = |end: usize| {
+        if b.get(end) == Some(&b'\r') && b.get(end + 1) == Some(&b'\n') {
+            end + 2
+        } else {
+            (end + 1).min(b.len())
+        }
+    };
+    let first_line = line_end(header_end);
+    if first_line >= b.len() {
+        return header_end;
+    }
+    let body = next_line(first_line);
+    let parent = block_parent_indent(text, at);
+    let indent = if digit > 0 {
+        parent + digit as i64
+    } else {
+        // The first line with something other than spaces sets the indentation.
+        let mut j = body;
+        let mut first = None;
+        while j < b.len() {
+            let e = line_end(j);
+            let seg = &text[j..e];
+            if !seg.bytes().all(|c| c == b' ') {
+                first = Some((seg.len() - seg.trim_start_matches(' ').len()) as i64);
+                break;
+            }
+            j = next_line(e);
+        }
+        match first {
+            Some(f) if f > parent => f,
+            _ => return header_end,
+        }
+    };
+    let indent = usize::try_from(indent).unwrap_or(0);
+    let mut last = None;
+    let mut j = body;
+    while j < b.len() {
+        let e = line_end(j);
+        let seg = &text[j..e];
+        let marker = indent == 0
+            && (seg.starts_with("---") || seg.starts_with("..."))
+            && seg
+                .as_bytes()
+                .get(3)
+                .is_none_or(|c| matches!(c, b' ' | b'\t'));
+        let blank = seg.bytes().all(|c| c == b' ');
+        if marker || !(blank || seg.bytes().take(indent).filter(|c| *c == b' ').count() == indent) {
+            break;
+        }
+        if seg.len() > indent {
+            last = Some(e);
+        }
+        if e >= b.len() {
+            break;
+        }
+        j = next_line(e);
+    }
+    last.unwrap_or(header_end)
+}
+
+/// The position of the `|` or `>` of a block scalar whose node starts at `start` (properties
+/// such as `&a` or `!t` may come first).
+fn block_indicator(text: &str, start: usize) -> Option<usize> {
+    let b = text.as_bytes();
+    let mut i = start;
+    loop {
+        while matches!(b.get(i), Some(b' ' | b'\t' | b'\r' | b'\n')) {
+            i += 1;
+        }
+        match b.get(i) {
+            Some(b'|' | b'>') => return Some(i),
+            Some(b'&' | b'!') => {
+                while b
+                    .get(i)
+                    .is_some_and(|c| !matches!(c, b' ' | b'\t' | b'\r' | b'\n'))
+                {
+                    i += 1;
+                }
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// The last scalar a node ends with, following the last entry or item of collections.
+fn last_leaf(mut n: NodeRef<'_>) -> NodeRef<'_> {
+    loop {
+        let next = match n.kind() {
+            NodeKind::Mapping => n.as_mapping().and_then(|m| m.iter().last()).map(|(_, v)| v),
+            NodeKind::Sequence => n.as_sequence().and_then(|s| s.iter().last()),
+            _ => None,
+        };
+        match next {
+            Some(c) => n = c,
+            None => return n,
+        }
+    }
+}
+
+/// The comment a node owns, as written: trailing comments, else leading ones. A mapping entry
+/// keeps its comments with its key, so the value of an entry reads those first, then the ones
+/// the engine attached to the value itself (a comment above a value on its own line, or above
+/// the `:` of an explicit entry). The root also has the document's header.
 fn comment_of(doc: &Document, n: NodeRef<'_>, is_root: bool) -> Option<String> {
     let pick = |list: &[oneyaml::Comment]| {
         let v: Vec<&str> = list.iter().map(|c| c.raw()).collect();
         (!v.is_empty()).then(|| v.join("\n"))
     };
-    let owner = n.key().unwrap_or(n);
-    let mut comment = doc
-        .comments(owner.id())
-        .ok()
-        .and_then(|c| pick(c.trailing()).or_else(|| pick(c.leading())));
+    let of = |id| {
+        doc.comments(id)
+            .ok()
+            .and_then(|c| pick(c.trailing()).or_else(|| pick(c.leading())))
+    };
+    let mut comment = n.key().and_then(|k| of(k.id()));
+    if comment.is_none() {
+        comment = of(n.id());
+    }
     if comment.is_none()
         && is_root
         && let Ok(h) = doc.header()
@@ -1148,11 +1329,22 @@ impl Handle {
         let toks = tokens(path)?;
         guarded(py, || {
             let mut st = self.lock(py)?;
-            let (start, end, comment) = {
+            let (start, end, comment, block) = {
                 let doc = Self::doc(&mut st, d)?;
-                let n = walk(&doc, &toks, true).map_err(|m| m.into_err(py))?;
+                let n = walk_from_end(&doc, &toks, true, true).map_err(|m| m.into_err(py))?;
                 let span = n.span();
-                (span.start, span.end, comment_of(&doc, n, toks.is_empty()))
+                let leaf = last_leaf(n);
+                let block = matches!(
+                    leaf.as_scalar().map(|s| s.style()),
+                    Some(ScalarStyle::Literal | ScalarStyle::Folded)
+                )
+                .then(|| leaf.span().start);
+                (
+                    span.start,
+                    span.end,
+                    comment_of(&doc, n, toks.is_empty()),
+                    block,
+                )
             };
             if st.lines.is_none() {
                 let text = st.stream.to_string();
@@ -1161,9 +1353,12 @@ impl Handle {
                 let index = LineIndex::new(&text[skip..]);
                 st.lines = Some((text, index));
             }
-            // The span of a block scalar runs through its last line break; the node ends
-            // after its last character.
+            // The span of a block scalar runs through its trailing lines; the node ends after
+            // its last content character. A collection that ends with one ends where it does.
             let end = st.lines.as_ref().map_or(end, |(text, _)| {
+                if let Some(at) = block.and_then(|s| block_indicator(text, s)) {
+                    return block_scalar_end(text, at);
+                }
                 let bytes = text.as_bytes();
                 let mut e = end.min(bytes.len());
                 while e > start && matches!(bytes[e - 1], b'\n' | b'\r') {

@@ -137,17 +137,26 @@ def is_index_text(tok: str) -> bool:
 
 
 def parse_index(tok: str) -> int:
-    return int(tok) if is_index_text(tok) else -1
+    if not is_index_text(tok):
+        return -1
+    # No sequence has this many items; a longer text is not converted (Python refuses past 4,300
+    # digits, and the answer is the same: out of range).
+    return int(tok) if len(tok) < 19 else _PAST_ANY_END
 
 
-def locate(doc: Doc, tokens: list, view: bool = False, follow: bool = True) -> Loc:
+_PAST_ANY_END = 1 << 62
+
+
+def locate(
+    doc: Doc, tokens: list, view: bool = False, follow: bool = True, from_end: bool = False
+) -> Loc:
     """Find the node at ``tokens``.
 
     Pointer tokens (the default) are the text of a key or an index: a miss is ``patch-path``
     and two keys that read as one text are ``refused-ambiguous``. With ``view`` the tokens are
     those of the lossless handle (see ``_tree.find_entry``) and a miss is a ``KeyError`` or
     ``IndexError``, as for a Python mapping or list. Without ``follow`` an alias met on the
-    way down is refused."""
+    way down is refused. With ``from_end`` a negative integer counts a sequence from its end."""
     loc = Loc()
     row = 0
     kind = doc.kind
@@ -177,17 +186,20 @@ def locate(doc: Doc, tokens: list, view: bool = False, follow: bool = True) -> L
             row = v
         elif k == K_SEQ:
             i = tok if type(tok) is int else parse_index(tok) if type(tok) is str else -1
+            if from_end and type(tok) is int and tok < 0:
+                i = T.count_items(doc, r) + tok
             if i < 0:
                 if view:
                     if type(tok) is int or (type(tok) is str and is_index_text(tok)):
-                        raise IndexError(f"index {tok} is out of range")
+                        raise IndexError(f"index {_shown(tok)} is out of range")
                     raise KeyError(_shown(tok))
                 raise refuse("patch-path", f"{tok!r} is not an index of a sequence")
             c, pe = item_at(doc, r, i)
             if c < 0:
                 if view:
                     raise IndexError(
-                        f"index {i} is out of range for a sequence of {T.count_items(doc, r)} items"
+                        f"index {_shown(tok)} is out of range for a sequence of "
+                        f"{T.count_items(doc, r)} items"
                     )
                 raise refuse("patch-path", f"index {i} is out of range")
             loc.anc.append(r)
@@ -911,8 +923,10 @@ def _put_collection(doc, loc, tv, pr, anchor, row_tag, slot_kind, ind_end, pflow
                 full += nl
             base = a + len(head) + len(nl)
             rows = snippet_rows(block, 0, base, fol, nl)
+            props_at = a + 1  # after the space that follows the marker
         else:
             a = ps0
+            props_at = a  # the properties lead the new text
             b = node_extent(doc, r)
             if b == doc.en[r]:
                 b += len(_line_comment(text, b))
@@ -927,7 +941,7 @@ def _put_collection(doc, loc, tv, pr, anchor, row_tag, slot_kind, ind_end, pflow
             if consumed:
                 full += nl
             rows = snippet_rows(block, 0, base, fol, nl)
-        rows.ps[0] = a + 1 if pr else rows.st[0]
+        rows.ps[0] = props_at if pr else rows.st[0]
         rows.anc[0] = anchor
         rows.tag[0] = row_tag
         splice(doc, a, b, full, r, r + doc.sz[r], rows, anc, (doc.en[r], rows.en[0]))

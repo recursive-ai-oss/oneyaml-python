@@ -86,13 +86,15 @@ class Handle:
             raise IndexError(f"no document {d} in the stream")
         return docs[d]
 
-    def _find(self, d: Any, path: Any, follow: bool = True) -> tuple[Doc, E.Loc]:
+    def _find(
+        self, d: Any, path: Any, follow: bool = True, from_end: bool = False
+    ) -> tuple[Doc, E.Loc]:
         toks = _tokens(path)
         doc = self._doc(d)
         if not doc.kind:
             raise KeyError("the document is empty")
         try:
-            return doc, E.locate(doc, toks, True, follow)
+            return doc, E.locate(doc, toks, True, follow, from_end)
         except E.ThroughAlias:
             raise make_error(
                 "the path goes through an alias; edit the anchored node instead", "refused-alias"
@@ -162,13 +164,17 @@ class Handle:
 
     def locate(self, d: int, path: Any) -> tuple[int, int, int, int, str | None]:
         """``(line, column, end_line, end_column, comment)`` of the node: 1-based, the end just
-        after its last character."""
-        doc, loc = self._find(d, path)
+        after its last character. A negative integer counts a sequence from its end."""
+        doc, loc = self._find(d, path, True, True)
         r = loc.row
         start = doc.ps[r] if doc.kind[r] != K_ALIAS else doc.st[r]
+        end = doc.en[r]
+        last = r + doc.sz[r] - 1
+        if doc.kind[last] == K_SCALAR and doc.sty[last] in "|>":
+            end = _block_scalar_end(doc.text, doc.st[last])
         before = "".join([x.text for x in self._p.docs[:d]])
         line, col = _linecol(before + doc.text[:start])
-        end_line, end_col = _linecol(before + doc.text[: doc.en[r]])
+        end_line, end_col = _linecol(before + doc.text[:end])
         return line, col, end_line, end_col, _comment(doc, loc)
 
     # ---- edits --------------------------------------------------------------------------
@@ -370,29 +376,32 @@ class Handle:
 
 
 _PROPS_TRAILING = re.compile(r"[ \t]*(?:[&!][^ \t\r\n]*[ \t]*)*(#[^\r\n]*)").match
+_COMMA_TRAILING = re.compile(r"[ \t]*,?[ \t]*(#[^\r\n]*)").match
+_MARKER_LINE = re.compile(r"---(?:[ \t]|$)")
+_QUESTION_LINE = re.compile(r"[ \t]*(?:[-?:][ \t]+)*\?[ \t]*(#[^\r\n]*)?\r?\n?$").match
+_MARKER_END = re.compile(r"\.\.\.(?:[ \t]|$)").match
+_DIRECTIVE_COMMENT = re.compile(r"(?:^|[ \t])(#.*)$")
 
 
 def _comment(doc: Doc, loc: E.Loc) -> str | None:
-    """The comment the node owns: the one on its line after it, else the comment lines above it.
+    """The comment the node owns, as the parsing engine attaches it: comments that follow the
+    node on its line (and those between an entry's key, colon and value), else the comment
+    lines above it.
 
-    A mapping entry's comments belong to the entry, so its value reads them: the comment after
-    the value (after the ``key:`` when the value is a block), else the lines above the key. A
-    block collection at the root starts with its first entry, which owns the comments directly
-    above it; the root reads the document's header instead: the comments before ``---`` and
-    those followed by a blank line before the content."""
+    A mapping entry's comments belong to the entry, so its value reads them, then the ones
+    above its own value when that starts a line. A block collection at the root starts with its
+    first entry, which owns the comments directly above it; the root reads the document's
+    header instead: the comments before ``---`` or among the directives, and those followed by
+    a blank line before the content."""
     r = loc.row
-    text = doc.text
     k = doc.kind[r]
     root = loc.parent < 0 and loc.key < 0
     block = k in (K_MAP, K_SEQ) and doc.sty[r] == "b"
     found: str | None = None
+    if loc.key >= 0 and loc.parent == 0 and _headed_key(doc):
+        return _trailing(doc, loc)  # what is above the empty key is the document's header
     if not (block and root):
-        if loc.key >= 0:
-            found = _entry_trailing(doc, loc)
-        elif not block:
-            m = _TRAILING(text, doc.en[r])
-            if m and (doc.st[r] != doc.en[r] or k == K_ALIAS):
-                found = m.group(1)
+        found = _trailing(doc, loc)
         if found is None:
             start = (
                 E.entry_start(doc, loc.key)
@@ -401,31 +410,181 @@ def _comment(doc: Doc, loc: E.Loc) -> str | None:
                 if k != K_ALIAS
                 else doc.st[r]
             )
-            if loc.parent >= 0 and loc.key < 0 and doc.kind[loc.parent] == K_SEQ:
+            if (
+                loc.parent >= 0
+                and loc.key < 0
+                and doc.kind[loc.parent] == K_SEQ
+                and (doc.sty[loc.parent] == "b" or loc.index > 0)
+            ):
                 start = E.dash_of(doc, loc.parent, loc.index, loc.prev_end)
             found = _leading(doc, start)
+        if found is None and loc.key >= 0:
+            found = _value_leading(doc, loc, block)
     if found is None and root:
-        found = _header(text, doc.ps[r] if k != K_ALIAS else doc.st[r])
+        found = _header(doc, r)
     return found
 
 
-def _entry_trailing(doc: Doc, loc: E.Loc) -> str | None:
-    """The comment after a mapping entry on its last line."""
+def _headed_key(doc: Doc) -> bool:
+    """True when the document is a block mapping whose first key is empty and written as a bare
+    ``:``; the engine reads the comments above that as the document's header."""
+    return (
+        bool(doc.kind)
+        and doc.kind[0] == K_MAP
+        and doc.sty[0] == "b"
+        and len(doc.kind) > 1
+        and doc.st[1] == doc.en[1]
+        and doc.ps[1] == doc.st[1]
+        and doc.text[doc.st[1] : doc.st[1] + 1] == ":"
+    )
+
+
+def _trailing(doc: Doc, loc: E.Loc) -> str | None:
+    """The comments that follow the node, or its entry's parts, on their lines, in text order."""
     r = loc.row
     k = doc.kind[r]
     text = doc.text
-    if k == K_ALIAS or (k == K_SCALAR and doc.sty[r] not in "|>" and doc.st[r] != doc.en[r]):
-        m = _TRAILING(text, doc.en[r])
-    elif k == K_SCALAR and doc.sty[r] in "|>":
+    found: dict[int, str] = {}
+
+    def take(m: Any) -> None:
+        if m:
+            found[m.start(1)] = m.group(1)
+
+    flow_parent = loc.parent >= 0 and doc.sty[loc.parent] in "fp"
+    after = _COMMA_TRAILING if flow_parent else _TRAILING
+    indicator = -1
+    if loc.key >= 0:
+        kr = loc.key
+        start = E.entry_start(doc, kr)
+        if text[start] == "?":
+            take(_TRAILING(text, start + 1))
+        elif E.only_blanks_before(text, start) and start > 0:
+            # A key that starts its own line under a ``?`` whose line ends in a comment.
+            above = text[E.prev_line(text, E.line_start(text, start)) : E.line_start(text, start)]
+            m = _QUESTION_LINE(above)
+            if m and m.group(1):
+                found[-1 - start] = m.group(1)
+        take(_TRAILING(text, doc.en[kr]))
+        indicator = E.colon_after(doc, kr)
+    elif loc.parent >= 0 and doc.kind[loc.parent] == K_SEQ and doc.sty[loc.parent] == "b":
+        indicator = E.dash_of(doc, loc.parent, loc.index, loc.prev_end)
+    if indicator >= 0:
+        m = _PROPS_TRAILING(text, indicator + 1)
+        if m and (k == K_ALIAS or doc.ps[r] >= m.start(1) or doc.st[r] == doc.en[r]):
+            take(m)
+    if k != K_ALIAS and doc.ps[r] < doc.st[r]:
+        m = _PROPS_TRAILING(text, doc.ps[r])
+        if m and m.start(1) < doc.st[r]:
+            take(m)
+    if k == K_SCALAR and doc.sty[r] in "|>":
         h = E._HEADER(text, doc.st[r])
-        m = _TRAILING(text, h.end() if h else doc.st[r] + 1)
-    elif k == K_SCALAR or doc.sty[r] == "b":
-        # A null value or a block collection: the comment follows the colon on the key's line.
-        colon = E.colon_after(doc, loc.key)
-        m = _PROPS_TRAILING(text, colon + 1) if colon >= 0 else None
+        take(_TRAILING(text, h.end() if h else doc.st[r] + 1))
+    elif k == K_ALIAS or (k == K_SCALAR and doc.st[r] != doc.en[r]):
+        take(after(text, doc.en[r]))
+    elif k in (K_MAP, K_SEQ) and doc.sty[r] in "fp":
+        take(_TRAILING(text, doc.st[r] + 1))
+        take(after(text, doc.en[r]))
+    return "\n".join(found[at] for at in sorted(found)) if found else None
+
+
+def _value_leading(doc: Doc, loc: E.Loc, block: bool) -> str | None:
+    """The comment lines the engine attaches to an entry's value itself: above a value that
+    starts its own line, or above the ``:`` of an explicit entry."""
+    r = loc.row
+    text = doc.text
+    colon = E.colon_after(doc, loc.key)
+    if colon >= 0 and E.only_blanks_before(text, colon):
+        got = _leading(doc, colon)
+        if got is not None:
+            return got
+    k = doc.kind[r]
+    has_props = k != K_ALIAS and doc.ps[r] < doc.st[r]
+    start = doc.ps[r] if k != K_ALIAS else doc.st[r]
+    if doc.st[r] == doc.en[r] and not has_props and k != K_ALIAS:
+        return None  # an empty value has no place of its own
+    if block and not has_props:
+        return None  # a block collection starts with its first entry, which owns them
+    if start > colon >= 0 and E.only_blanks_before(text, start):
+        return _leading(doc, start)
+    return None
+
+
+_BLOCK_HEADER = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?").match
+
+
+def _block_parent_indent(text: str, at: int) -> int:
+    """The indentation of the block that holds the block scalar whose indicator is at ``at``: the
+    column of the mapping key or of the ``-`` it follows, -1 at the top of a document. Read from
+    the header line, which is all it takes."""
+    ls = E.line_start(text, at)
+    if ls == 0 and text.startswith("\ufeff"):
+        ls = 1
+    line = text[ls:at]
+    if line.startswith("---") and (len(line) == 3 or line[3] in " \t"):
+        return -1
+    p = 0
+    last = -1
+    n = len(line)
+    while True:
+        while p < n and line[p] == " ":
+            p += 1
+        if p < n and line[p] in "-?:" and (p + 1 == n or line[p + 1] in " \t"):
+            last = p
+            p += 1
+            continue
+        break
+    # Only properties between the indicators and the scalar: the scalar is the item itself.
+    if all(t[0] in "&!" for t in line[p:].split()):
+        return last
+    return p
+
+
+def _block_scalar_end(text: str, at: int) -> int:
+    """Where a block scalar ends: just after its last content character. The spaces that make
+    up the indentation of a trailing line, and the line breaks, are not content; the header is
+    the end when the scalar has no content. ``at`` is the position of its indicator."""
+    m = _BLOCK_HEADER(text, at)
+    header_end = m.end() if m else at + 1
+    digit = next((c for c in (m.group() if m else "") if c.isdigit()), None)
+    n = len(text)
+    first_line = E.line_end(text, header_end)
+    if first_line >= n:
+        return header_end
+    body = E.next_line(text, first_line)
+    parent = _block_parent_indent(text, at)
+    if digit:
+        indent = parent + int(digit)
     else:
-        m = _TRAILING(text, doc.en[r])
-    return m.group(1) if m else None
+        indent = -1
+        j = body
+        while j < n:
+            e = E.line_end(text, j)
+            seg = text[j:e]
+            if seg.strip(" "):
+                indent = len(seg) - len(seg.lstrip(" "))
+                break
+            if e >= n:
+                break
+            j = E.next_line(text, e)
+        if indent <= parent:
+            return header_end
+    indent = max(indent, 0)
+    pad = " " * indent
+    last = None
+    j = body
+    while j < n:
+        e = E.line_end(text, j)
+        seg = text[j:e]
+        if indent == 0 and seg.startswith(("---", "...")) and (len(seg) == 3 or seg[3] in " \t"):
+            break
+        if seg.strip(" ") and not seg.startswith(pad):
+            break
+        if len(seg) > indent:
+            last = e
+        if e >= n:
+            break
+        j = E.next_line(text, e)
+    return header_end if last is None else last
 
 
 def _closing_column(doc: Doc, start: int) -> int:
@@ -453,6 +612,15 @@ def _leading(doc: Doc, start: int) -> str | None:
     if not E.only_blanks_before(text, start):
         return None
     column = E.col(text, start)
+    # Lines inside a block scalar are its content, whatever they look like.
+    inside = max(
+        (
+            doc.en[x]
+            for x in range(len(doc.kind))
+            if doc.kind[x] == K_SCALAR and doc.sty[x] in "|>" and doc.en[x] <= start
+        ),
+        default=-1,
+    )
     found: list[tuple[str, int, bool]] = []  # comment, its indent, a blank line below it
     a = E.line_start(text, start)
     gap = False
@@ -462,6 +630,8 @@ def _leading(doc: Doc, start: int) -> str | None:
             top = True
             break
         pls = E.prev_line(text, a)
+        if pls < inside:
+            break
         raw = text[pls:a]
         line = raw.strip(" \t\r\n\ufeff")
         if not line:
@@ -486,29 +656,50 @@ def _leading(doc: Doc, start: int) -> str | None:
     return "\n".join(x[0] for x in reversed(lines)) if lines else None
 
 
-def _header(text: str, start: int) -> str | None:
-    """The document header: comments before ``---`` or the directives, a comment on the
-    ``---`` line, and the comments above the content that have a blank line after them."""
-    head = text[: E.line_start(text, start)].lstrip("\ufeff")
+def _header(doc: Doc, r: int) -> str | None:
+    """The document header: comments before ``---`` or among the directives (a comment on a
+    directive's line too), a comment on the ``---`` line, and the comments above the content that
+    have a blank line after them. A document with no content has every comment of its own as
+    header."""
+    text = doc.text
+    start = doc.ps[r] if doc.kind[r] != K_ALIAS else doc.st[r]
+    empty = doc.kind[r] == K_SCALAR and doc.st[r] == doc.en[r] == start
+    headed = r == 0 and _headed_key(doc)
+    head = text if empty else text[:start]
+    rows = re.split(r"\r\n|\r|\n", head.lstrip("\ufeff"))
+    if not empty:
+        # What precedes the content on its own line is not a line of the header, unless it is
+        # the ``---`` the content follows.
+        last = rows.pop().strip(" \t")
+        if _MARKER_LINE.match(last + " "):
+            rows.append(last)
     out: list[str] = []
     pending: list[str] = []  # comments after the marker, kept if a blank line follows them
-    rows = re.split(r"\r\n|\r|\n", head)
-    rows.pop()  # what follows the last line break is not a line
     for raw in rows:
         line = raw.strip(" \t")
         if line.startswith("#"):
             pending.append(line)
-        elif line == "---" or line.startswith("--- ") or line.startswith("---\t"):
+        elif _MARKER_LINE.match(line + " "):
             out += pending
             pending = []
             m = _TRAILING(line, 3)
             if m:
                 out.append(m.group(1))
-        elif not line or line.startswith("%"):  # a blank line or a directive
+        elif not line or (not empty and _MARKER_END(line + " ")):
             out += pending
             pending = []
+        elif line.startswith("%"):  # a directive
+            out += pending
+            pending = []
+            m = _DIRECTIVE_COMMENT.search(line)
+            if m:
+                out.append(m.group(1))
+        elif empty and line.startswith("..."):
+            break
         else:
             pending = []
+    if empty or headed:
+        out += pending
     return "\n".join(out) if out else None
 
 
@@ -519,7 +710,9 @@ def _linecol(head: str) -> tuple[int, int]:
         n += 1
         last = m.end()
     tail = head[last:]
-    if tail.startswith("\ufeff"):
+    # Only the mark that starts the stream is no column; one that begins a later document is
+    # a character of its line.
+    if n == 0 and tail.startswith("\ufeff"):
         tail = tail[1:]
     return n + 1, len(tail) + 1
 
