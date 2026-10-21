@@ -126,7 +126,7 @@ def test_reads(parse):
 def test_info(parse):
     h = parse(DOC)
     assert h.info(0, ["a"]) == ("plain", None, None, None, 1, 4)
-    assert h.info(0, ["e"]) == ("single-quoted", None, None, None, 8, 4)
+    assert h.info(0, ["e"]) == ("single-quoted", None, None, "# note", 8, 4)
     assert h.info(0, ["c"])[:3] == ("flow", None, "anc")
     assert h.info(0, ["d"])[0] == "alias"
     assert h.info(0, ["b"])[0] == "block"

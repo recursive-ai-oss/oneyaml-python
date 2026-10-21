@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sys
 import threading
-from collections.abc import Iterator, MutableMapping, MutableSequence, Sequence
+from collections.abc import Iterable, Iterator, MutableMapping, MutableSequence, Sequence
 from typing import IO, Any, NamedTuple
 
 from . import _api
@@ -22,6 +22,7 @@ from ._types import FrozenMapping
 
 __all__ = [
     "Document",
+    "Location",
     "MappingView",
     "Position",
     "SequenceView",
@@ -42,6 +43,21 @@ class Position(NamedTuple):
 
     line: int
     column: int
+
+
+class Location(NamedTuple):
+    """Where a node is in the text, as :meth:`Document.locate` reports it.
+
+    ``line`` and ``column`` are where the node starts, 1-based and counted in characters like
+    the position of a :class:`YAMLError`; ``end_line`` and ``end_column`` are the place just
+    after its last character; ``comment`` is the node's comment as ``.comment`` of a view reads
+    it (a scalar value is plain data and has no ``.comment`` of its own)."""
+
+    line: int
+    column: int
+    end_line: int
+    end_column: int
+    comment: str | None = None
 
 
 # Shifts of one sequence kept apart before they are folded into a single stamp, and paths
@@ -312,6 +328,15 @@ class _Node:
             shown = "stale"
         return f"<{type(self).__name__} {shown}>"
 
+    # A copy of a document or a view is plain data, as ``to_python`` gives it: the live handle
+    # behind it cannot be duplicated, and a copy that kept writing into the same text would
+    # not be one. ``parse(bytes(doc))`` makes an independent document.
+    def __copy__(self) -> Any:
+        return self.to_python()
+
+    def __deepcopy__(self, memo: Any) -> Any:
+        return self.to_python()
+
     # -- reading and facts
 
     def to_python(self) -> Any:
@@ -340,7 +365,14 @@ class _Node:
 
     @property
     def comment(self) -> str | None:
-        """The raw comment text at the end of the node's line, else the comment lines above it.
+        """The comment that belongs to the node, as written (with its ``#``), or None.
+
+        That is the comment at the end of the node's line, else the comment lines above it
+        (several lines are joined with ``"\\n"``). A mapping entry owns the comments around its
+        key, so a mapping value reads those: ``a: 1  # c`` gives ``"# c"`` for ``doc["a"]`` and
+        for a collection under ``a:`` the comment after the colon. A comment directly above the
+        first entry of a document belongs to that entry; the document itself reads the
+        comments before ``---`` and those set apart from the content by a blank line.
 
         Read-only."""
         return self._info()[3]
@@ -449,6 +481,9 @@ class _Documents(Sequence):
     def __len__(self) -> int:
         return self._core.h.count()
 
+    def __repr__(self) -> str:
+        return f"<documents of a stream: {len(self)}>"
+
     def __getitem__(self, index: Any) -> Any:
         n = len(self)
         if isinstance(index, slice):
@@ -536,8 +571,7 @@ class Document(_Node):
     def at(self, pointer: str, *, document: int | None = None) -> Any:
         """The value at an RFC 6901 pointer (``"/spec/containers/0/image"``): plain data for a
         scalar, a view for a collection. A missing path raises ``KeyError`` or ``IndexError``."""
-        if not isinstance(pointer, str):
-            raise TypeError(f"a pointer is a str, not {type(pointer).__name__}")
+        _check_pointer(pointer)
         d = self._d if document is None else document
         node = Document(self._core, d, ())
         if document is not None and not 0 <= d < self._core.h.count():
@@ -551,6 +585,57 @@ class Document(_Node):
             # exactly that key goes.
             path = self._core.h.resolve(d, pointer)
             return node._view(tuple(path))
+
+    def locate(self, path: str | Sequence[Any], *, document: int | None = None) -> Location:
+        """Where the node at ``path`` is in the text, scalars included.
+
+        ``path`` is an RFC 6901 pointer (``"/spec/containers/0/image"``) or a sequence of keys
+        and indices, the form validation libraries report errors in (``("spec", "containers",
+        0, "image")``). For a mapping value this is the place where the value starts; a
+        block collection starts at its first entry. Lines and columns are 1-based, as in
+        :class:`YAMLError`. A missing path raises ``KeyError`` or ``IndexError``, as :meth:`at`
+        does.
+        """
+        d = self._d if document is None else document
+        if isinstance(d, bool) or not isinstance(d, int):
+            raise TypeError(f"document must be an integer, not {type(d).__name__}")
+        h = self._core.h
+        if not 0 <= d < h.count():
+            raise IndexError("document index out of range")
+        with self._core.lock:
+            if isinstance(path, str):
+                _check_pointer(path)
+                steps = list(h.resolve(d, path))
+            else:
+                if isinstance(path, (bytes, bytearray)) or not isinstance(path, Iterable):
+                    raise TypeError(
+                        f"a path is a pointer or a sequence of keys, not {type(path).__name__}"
+                    )
+                steps = self._steps(h, d, path)
+            return Location(*h.locate(d, steps))
+
+    @staticmethod
+    def _steps(h: Any, d: int, path: Iterable[Any]) -> list:
+        """The backend tokens for keys and indices: an index into a sequence (negative counts
+        from the end) becomes its text, a key stays exact, as a view reads it."""
+        steps: list = []
+        for key in path:
+            kind = h.kind(d, steps)
+            if kind == "mapping":
+                steps.append(_token(key))
+            elif kind == "sequence":
+                if isinstance(key, str) and key.isascii() and key.isdigit():
+                    key = int(key)
+                if isinstance(key, bool) or not isinstance(key, int):
+                    raise KeyError(key)
+                if key < 0:
+                    key += h.length(d, steps)
+                    if key < 0:
+                        raise IndexError("sequence index out of range")
+                steps.append(str(key))
+            else:
+                raise KeyError(key)
+        return steps
 
     def patch(self, ops: Any, *, document: int | None = None) -> None:
         """Apply an RFC 6902 patch, all or nothing.
@@ -589,6 +674,16 @@ class Document(_Node):
         return f"<Document {self.to_python()!r}>"
 
 
+def _check_pointer(pointer: Any) -> None:
+    if not isinstance(pointer, str):
+        raise TypeError(f"a pointer is a str, not {type(pointer).__name__}")
+    if pointer and not pointer.startswith("/"):
+        raise PatchError(
+            f"a JSON Pointer must be empty or start with '/', as in '/spec/ports'; got {pointer!r}",
+            category="patch-invalid",
+        )
+
+
 def _is_binary(fp: Any) -> bool:
     import io
 
@@ -600,6 +695,9 @@ def _is_binary(fp: Any) -> bool:
 
 
 _DEFAULT_LIMITS = Limits()
+
+# Lets ``dumps`` write a document or a view as its current value.
+_api._NODE = _Node
 
 
 def parse(data: str | bytes, *, limits: Limits | None = None) -> Document:

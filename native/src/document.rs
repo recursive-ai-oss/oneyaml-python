@@ -315,6 +315,28 @@ fn walk<'d>(doc: &'d Document, toks: &[Tok], follow: bool) -> Result<NodeRef<'d>
     Ok(node)
 }
 
+/// The comment a node owns, as written: its trailing comments, else its leading ones. A mapping
+/// entry keeps its comments with its key, so the value of an entry reads them there; the root
+/// also has the document's header.
+fn comment_of(doc: &Document, n: NodeRef<'_>, is_root: bool) -> Option<String> {
+    let pick = |list: &[oneyaml::Comment]| {
+        let v: Vec<&str> = list.iter().map(|c| c.raw()).collect();
+        (!v.is_empty()).then(|| v.join("\n"))
+    };
+    let owner = n.key().unwrap_or(n);
+    let mut comment = doc
+        .comments(owner.id())
+        .ok()
+        .and_then(|c| pick(c.trailing()).or_else(|| pick(c.leading())));
+    if comment.is_none()
+        && is_root
+        && let Ok(h) = doc.header()
+    {
+        comment = pick(&h);
+    }
+    comment
+}
+
 // ---- engine errors -----------------------------------------------------------------------------
 
 fn edit_fail(e: &EditError) -> Fail {
@@ -1084,14 +1106,7 @@ impl Handle {
                     Ok(t) => t.map(|t| t.to_string()),
                     Err(e) => return Err(Self::fail(py, engine_fail(&e))),
                 };
-                let mut comment = None;
-                if let Ok(c) = doc.comments(n.id()) {
-                    let pick = |list: &[oneyaml::Comment]| {
-                        let v: Vec<&str> = list.iter().map(|c| c.raw()).collect();
-                        (!v.is_empty()).then(|| v.join("\n"))
-                    };
-                    comment = pick(c.trailing()).or_else(|| pick(c.leading()));
-                }
+                let comment = comment_of(&doc, n, toks.is_empty());
                 (
                     style_name(n),
                     tag,
@@ -1116,6 +1131,66 @@ impl Handle {
             });
             let (line, column) = pos.unzip();
             Ok((style, tag, anchor, comment, line, column)
+                .into_pyobject(py)?
+                .into_any())
+        })
+    }
+
+    /// `(line, column, end_line, end_column, comment)` of the node at `path`, 1-based, columns in
+    /// characters; the end is the position just after the node's last character (an alias is
+    /// not followed).
+    fn locate<'py>(
+        &self,
+        py: Python<'py>,
+        d: usize,
+        path: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let toks = tokens(path)?;
+        guarded(py, || {
+            let mut st = self.lock(py)?;
+            let (start, end, comment) = {
+                let doc = Self::doc(&mut st, d)?;
+                let n = walk(&doc, &toks, true).map_err(|m| m.into_err(py))?;
+                let span = n.span();
+                (span.start, span.end, comment_of(&doc, n, toks.is_empty()))
+            };
+            if st.lines.is_none() {
+                let text = st.stream.to_string();
+                let bare = text.trim_start_matches('\u{feff}').len();
+                let skip = text.len() - bare;
+                let index = LineIndex::new(&text[skip..]);
+                st.lines = Some((text, index));
+            }
+            // The span of a block scalar runs through its last line break; the node ends
+            // after its last character.
+            let end = st.lines.as_ref().map_or(end, |(text, _)| {
+                let bytes = text.as_bytes();
+                let mut e = end.min(bytes.len());
+                while e > start && matches!(bytes[e - 1], b'\n' | b'\r') {
+                    e -= 1;
+                }
+                e
+            });
+            let place = |at: usize| {
+                st.lines.as_ref().and_then(|(text, index)| {
+                    let skip = text.len() - text.trim_start_matches('\u{feff}').len();
+                    index
+                        .line_col(at.saturating_sub(skip), ColumnUnit::Char)
+                        .map(|lc| (lc.line + 1, lc.column + 1))
+                })
+            };
+            let (Some((line, column)), Some((end_line, end_column))) = (place(start), place(end))
+            else {
+                return Err(Self::fail(
+                    py,
+                    Fail::Yaml {
+                        category: "other",
+                        message: "the node has no place in the text".to_string(),
+                        at: None,
+                    },
+                ));
+            };
+            Ok((line, column, end_line, end_column, comment)
                 .into_pyobject(py)?
                 .into_any())
         })

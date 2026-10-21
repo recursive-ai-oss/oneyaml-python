@@ -6,10 +6,30 @@ Every failure on a YAML input is a :class:`YAMLError`, a ``ValueError`` subclass
 
 from __future__ import annotations
 
+from typing import Literal
+
 __all__ = ["LimitError", "ParseError", "PatchError", "YAMLError"]
+
+Category = Literal[
+    "syntax",
+    "encoding",
+    "limit",
+    "duplicate-key",
+    "unresolved-tag",
+    "patch-path",
+    "patch-test",
+    "patch-invalid",
+    "refused-alias",
+    "refused-ambiguous",
+    "other",
+]
 
 # Categories that mean "the text is not acceptable YAML" and "a resource limit was hit".
 _PARSE = frozenset({"syntax", "encoding", "duplicate-key", "unresolved-tag"})
+# Categories of an edit or a patch that was refused.
+_PATCH = frozenset(
+    {"patch-path", "patch-test", "patch-invalid", "refused-alias", "refused-ambiguous"}
+)
 
 
 class YAMLError(ValueError):
@@ -22,7 +42,9 @@ class YAMLError(ValueError):
         column: 1-based column, counted in characters, or None.
         offset: 0-based character offset into the decoded text, or None.
         message: the description without the position.
-        events: lines of the event stream produced before the error (may be empty).
+        source: the name of the file the text was read from, when ``load`` knew it, else None.
+        events: lines of the event stream produced before the error (a debugging aid; may be
+            empty).
     """
 
     def __init__(
@@ -37,12 +59,23 @@ class YAMLError(ValueError):
     ) -> None:
         where = "" if line is None else f" (line {line}, column {column})"
         super().__init__(f"{message}{where}")
+        self.source: str | None = None
         self.message = message
-        self.category = category
+        self.category: Category = category  # type: ignore[assignment]
         self.line = line
         self.column = column
         self.offset = offset
         self.events = list(events) if events else []
+
+    def set_source(self, name: str) -> None:
+        """Record the file the text came from; the message then names it."""
+        if self.source is not None:
+            return
+        self.source = name
+        where = (
+            f"{name}" if self.line is None else f"{name}, line {self.line}, column {self.column}"
+        )
+        self.args = (f"{self.message} ({where})",)
 
     def __reduce__(self):
         return (_rebuild, (type(self), self.message, self.category, self.line, self.column,
@@ -103,8 +136,10 @@ def make_error(
         cls = LimitError
     elif category in _PARSE:
         cls = ParseError
+    elif category in _PATCH:
+        cls = PatchError
     else:
         cls = YAMLError
     err = cls(message, category=category, line=line, column=column, offset=offset, events=events)
-    err.construct = construct
+    err._construct = construct
     return err

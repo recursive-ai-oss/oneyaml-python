@@ -6,25 +6,35 @@ Set ONEYAML_BACKEND to ``auto`` (default), ``native`` or ``pure`` to choose.
 
 from __future__ import annotations
 
-import os
-from importlib import import_module
-from importlib.metadata import PackageNotFoundError, version
-from types import ModuleType
+import os as _os
+from importlib import import_module as _import_module
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+from importlib.metadata import version as _version
+from types import ModuleType as _ModuleType
 
 from . import _api
 from ._api import dump, dump_all, dumps, dumps_all, load, load_all, loads, loads_all
-from ._document import Document, MappingView, Position, SequenceView, StaleViewError, parse
+from ._document import (
+    Document,
+    Location,
+    MappingView,
+    Position,
+    SequenceView,
+    StaleViewError,
+    parse,
+)
 from ._errors import LimitError, ParseError, PatchError, YAMLError
 from ._limits import Limits
 from ._types import FrozenMapping, Tagged
 
 try:
-    __version__ = version("oneyaml")
-except PackageNotFoundError:  # running from a source tree that is not installed
+    __version__ = _version("oneyaml")
+except _PackageNotFoundError:  # running from a source tree that is not installed
     __version__ = "0+unknown"
 
 __all__ = [
     "Document",
+    "Location",
     "MappingView",
     "Position",
     "SequenceView",
@@ -53,13 +63,13 @@ __all__ = [
 _CHOICES = ("auto", "native", "pure")
 
 
-def _select() -> ModuleType:
-    want = os.environ.get("ONEYAML_BACKEND", "auto").strip().lower() or "auto"
+def _select() -> _ModuleType:
+    want = _os.environ.get("ONEYAML_BACKEND", "auto").strip().lower() or "auto"
     if want not in _CHOICES:
         raise ValueError(f"ONEYAML_BACKEND must be one of {', '.join(_CHOICES)}; got {want!r}")
     if want != "pure":
         try:
-            return import_module("oneyaml._native")
+            return _import_module("oneyaml._native")
         except ImportError as exc:
             if want == "native":
                 raise ImportError(
@@ -67,11 +77,12 @@ def _select() -> ModuleType:
                     f"({exc}). Install a oneyaml wheel built for this platform, "
                     "or unset ONEYAML_BACKEND to use the pure-Python backend."
                 ) from exc
-    return import_module("oneyaml._pure")
+    return _import_module("oneyaml._pure")
 
 
 _impl = _select()
 _api._impl = _impl
+del annotations  # the name that `from __future__ import annotations` leaves behind
 
 #: Name of the active backend: ``"native"`` or ``"pure"``.
 backend: str = _impl.BACKEND

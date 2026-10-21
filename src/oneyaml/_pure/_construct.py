@@ -116,11 +116,11 @@ def parse(data: Any, limits: Any, schema: str = "core", multi: bool = True) -> P
     return Parsed(text, events, args)
 
 
-def build(parsed: Parsed, multi: bool, schema: str = "core") -> Any:
+def build(parsed: Parsed, multi: bool, schema: str = "core", hooks: tuple | None = None) -> Any:
     """The value of the single document of ``parsed`` (``multi=False``) or a list of every
-    document (``multi=True``)."""
+    document (``multi=True``). ``hooks`` is ``(parse_float, tags)`` or None (see ``load_with``)."""
     try:
-        docs = _build(parsed.text, parsed.events, multi, *parsed.args, schema=schema)
+        docs = _build(parsed.text, parsed.events, multi, *parsed.args, schema=schema, hooks=hooks)
     except Fail as exc:
         raise _fail_error(parsed.text, exc) from None
     if multi:
@@ -140,6 +140,82 @@ def load(data: Any, limits: Any, multi: bool, schema: str = "core") -> Any:
     ``"yaml11"`` (the rules of PyYAML's safe loader) or ``"text"`` (every scalar a string,
     tags ignored)."""
     return build(parse(data, limits, schema, multi), multi, schema)
+
+
+def _hooked(number, tagged_scalar, tag_collection, parse_float, tags):
+    """The scalar and tag readers with the caller's hooks around them. Wrapping the readers keeps
+    a load without hooks exactly as fast as it was: the build loop does not know about them."""
+    if parse_float is not None:
+        plain_number = number
+
+        def number(v, cap, wide):  # noqa: F811
+            r = plain_number(v, cap, wide)
+            # The text of a finite float goes to the hook, as ``json`` does; ``.inf`` and
+            # ``.nan`` are not numbers a decimal type can usually hold.
+            if type(r) is float and v.lstrip("+-").lower() not in (".inf", ".nan"):
+                return parse_float(v)
+            return r
+
+    if tags:
+        plain_scalar = tagged_scalar
+        plain_collection = tag_collection
+
+        def tagged_scalar(tag, v, cap, wide):  # noqa: F811
+            r = plain_scalar(tag, v, cap, wide)
+            if type(r) is Tagged:
+                make = tags.get(r.tag)
+                if make is not None:
+                    return make(r.value)
+            return r
+
+        def tag_collection(tag, v, is_map, e0):  # noqa: F811
+            r = plain_collection(tag, v, is_map, e0)
+            if type(r) is Tagged:
+                make = tags.get(r.tag)
+                if make is not None:
+                    return make(r.value)
+            return r
+
+    return number, tagged_scalar, tag_collection
+
+
+def load_with(
+    data: Any,
+    limits: Any,
+    multi: bool,
+    *,
+    merge_keys: bool = False,
+    parse_float: Any = None,
+    tags: Any = None,
+    native_events: Any = None,
+) -> Any:
+    """``load`` with the options of the public readers: ``merge_keys`` applies ``<<`` entries,
+    ``parse_float`` builds floats from their text, ``tags`` maps a tag to a function that builds
+    a value from a ``Tagged`` node's plain content.
+
+    The native backend passes its own event reader as ``native_events``; the values are then
+    built here from its events, so both backends read the options the same way."""
+    schema = "core-merge" if merge_keys else "core"
+    hooks = (parse_float, tags) if parse_float is not None or tags else None
+    if native_events is None:
+        return build(parse(data, limits, schema, multi), multi, schema, hooks)
+    depth, nf, nfloor, bf, bfloor, _size, _scalar, _docs, digits = limits._native
+    args = (
+        None if digits >= _NONE else digits,
+        None if depth >= _NONE else depth,
+        (nf, nfloor, bf, bfloor),
+    )
+    # The native reader checks the input and scalar sizes and the document count itself.
+    try:
+        events = native_events(data, limits)
+        return build(Parsed(decode(data), events, args), multi, schema, hooks)
+    except YAMLError:
+        # A load reports the first fault in reading order, which the pure parser knows (a
+        # duplicate key before a later syntax error, say); the native events stop at the
+        # syntax error, or build the whole document first. The pure verdict stands when it
+        # finds a fault, the native one if not. Nothing of the caller's runs in this check.
+        build(parse(data, limits, schema, multi), multi, schema)
+        raise
 
 
 def _check_sizes(events: list[tuple], scalar_size: int, documents: int) -> None:
@@ -179,6 +255,7 @@ def _build(  # noqa: C901
     budget: tuple[int, int, int, int],
     partial: bool = False,
     schema: str = "core",
+    hooks: tuple | None = None,
 ) -> list[Any]:
     nf, nfloor, bf, bfloor = budget
     wide: dict[int, float] = {}
@@ -197,6 +274,10 @@ def _build(  # noqa: C901
     keywords, number_start, word_start, number, tagged_scalar, tag_collection, make_map = _SCHEMAS[
         schema
     ]
+    if hooks is not None:
+        number, tagged_scalar, tag_collection = _hooked(
+            number, tagged_scalar, tag_collection, *hooks
+        )
     merge_seen = False
     missing = _MISSING
     # Where the document began (event index and offset), the collections closed since, and what
@@ -244,7 +325,7 @@ def _build(  # noqa: C901
                 add = cur.append
                 if k == MAP_END:
                     if merge_seen:
-                        v = _map_merging(buf, e0, e, events, info, wide, intern_key)
+                        v = _map_merging(buf, e0, e, events, info, wide, intern_key, make_map)
                     else:
                         v = make_map(buf, e0, e, events, info, wide, intern_key)
                 else:
@@ -258,7 +339,8 @@ def _build(  # noqa: C901
                 # (a redefinition) already took the name over.
                 if a is not None and anchors[a] is _OPEN:
                     anchors[a] = v
-                    _measure(v, info)
+                    if type(v) in _COLLECTIONS:  # a tag hook may have made it something else
+                        _measure(v, info)
             elif k == MAP_START or k == SEQ_START:  # noqa: SIM109 (hot loop)
                 push((cur, e))
                 cur = []
@@ -532,18 +614,28 @@ def _map_last_wins(buf, e0, e_end, events, info, wide, intern_key):
     return _map_slow(ks, vs, e0, events, info, wide, False)
 
 
-def _map_merging(buf, e0, e_end, events, info, wide, intern_key):
+def _map_merging(buf, e0, e_end, events, info, wide, intern_key, own_map=None):
     """A mapping that holds ``<<`` keys: the merged entries come first, the mapping's own
-    entries replace theirs. In a list of mappings the first one wins."""
+    entries replace theirs. In a list of mappings the first one wins.
+
+    ``own_map`` builds the mapping's own entries; with the strict builder (YAML 1.2) a repeated
+    key is an error, ``<<`` included. The YAML 1.1 rules let the last one win."""
     if len(buf) % 2:
         raise Fail("a mapping key has no value", "syntax", e_end[1])
+    strict = own_map is _map
     merges: list[dict] = []
     own: list[Any] = []
+    seen_merge = False
     for i in range(0, len(buf), 2):
         if buf[i] is not MERGE:
             own.append(buf[i])
             own.append(buf[i + 1])
             continue
+        if strict and seen_merge:
+            raise Fail(
+                "the mapping has a duplicate key", "duplicate-key", _key_offset(events, e0, i // 2)
+            )
+        seen_merge = True
         v = buf[i + 1]
         found = reversed(v) if type(v) is list else (v,)
         for m in found:
@@ -557,7 +649,7 @@ def _map_merging(buf, e0, e_end, events, info, wide, intern_key):
     merged: dict = {}
     for m in merges:
         merged.update(m)
-    merged.update(_map_last_wins(own, e0, e_end, events, info, wide, intern_key))
+    merged.update((own_map or _map_last_wins)(own, e0, e_end, events, info, wide, intern_key))
     # What an alias to this mapping stands for is the mapping as written, merged sources
     # included: that is what a copy of the text would hold, and what the budget must charge.
     nodes, size, height = 1, 0, 0
@@ -577,8 +669,16 @@ def _map_merging(buf, e0, e_end, events, info, wide, intern_key):
     return merged
 
 
+# YAML 1.2 plus the ``<<`` merge key, for callers who ask for it: plain ``<<`` is the merge key,
+# everything else reads as in the Core schema (a repeated key is still an error).
+_CORE_MERGE_KEYWORDS = {**KEYWORDS, "<<": MERGE}
+
 _SCHEMAS = {
     "core": (KEYWORDS, NUMBER_START, WORD_START, number, tagged_scalar, _tag_collection, _map),
+    "core-merge": (
+        _CORE_MERGE_KEYWORDS, NUMBER_START, WORD_START | {"<"}, number, tagged_scalar,
+        _tag_collection, _map,
+    ),
     "yaml11": (
         KEYWORDS11, NUMBER_START11, WORD_START11, number11, tagged_scalar11, tag_collection11,
         _map_last_wins,

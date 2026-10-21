@@ -160,6 +160,17 @@ class Handle:
         line, col = _linecol(before + doc.text[:pos])
         return style, tag, anchor, comment, line, col
 
+    def locate(self, d: int, path: Any) -> tuple[int, int, int, int, str | None]:
+        """``(line, column, end_line, end_column, comment)`` of the node: 1-based, the end just
+        after its last character."""
+        doc, loc = self._find(d, path)
+        r = loc.row
+        start = doc.ps[r] if doc.kind[r] != K_ALIAS else doc.st[r]
+        before = "".join([x.text for x in self._p.docs[:d]])
+        line, col = _linecol(before + doc.text[:start])
+        end_line, end_col = _linecol(before + doc.text[: doc.en[r]])
+        return line, col, end_line, end_col, _comment(doc, loc)
+
     # ---- edits --------------------------------------------------------------------------
 
     def _edit(self, doc: Doc, work: Any) -> bool:
@@ -358,40 +369,147 @@ class Handle:
         self._version += 1
 
 
+_PROPS_TRAILING = re.compile(r"[ \t]*(?:[&!][^ \t\r\n]*[ \t]*)*(#[^\r\n]*)").match
+
+
 def _comment(doc: Doc, loc: E.Loc) -> str | None:
-    """The comment on the node's line after it, else the comment lines directly above it."""
-    if loc.key >= 0:
-        return None  # the engine keeps a mapping entry's comments with its key, not its value
+    """The comment the node owns: the one on its line after it, else the comment lines above it.
+
+    A mapping entry's comments belong to the entry, so its value reads them: the comment after
+    the value (after the ``key:`` when the value is a block), else the lines above the key. A
+    block collection at the root starts with its first entry, which owns the comments directly
+    above it; the root reads the document's header instead: the comments before ``---`` and
+    those followed by a blank line before the content."""
     r = loc.row
     text = doc.text
     k = doc.kind[r]
+    root = loc.parent < 0 and loc.key < 0
     block = k in (K_MAP, K_SEQ) and doc.sty[r] == "b"
-    if block and loc.parent < 0:
-        return None  # a block collection starts with its first entry, which owns the comments
-    if not block:
+    found: str | None = None
+    if not (block and root):
+        if loc.key >= 0:
+            found = _entry_trailing(doc, loc)
+        elif not block:
+            m = _TRAILING(text, doc.en[r])
+            if m and (doc.st[r] != doc.en[r] or k == K_ALIAS):
+                found = m.group(1)
+        if found is None:
+            start = (
+                E.entry_start(doc, loc.key)
+                if loc.key >= 0
+                else doc.ps[r]
+                if k != K_ALIAS
+                else doc.st[r]
+            )
+            if loc.parent >= 0 and loc.key < 0 and doc.kind[loc.parent] == K_SEQ:
+                start = E.dash_of(doc, loc.parent, loc.index, loc.prev_end)
+            found = _leading(doc, start)
+    if found is None and root:
+        found = _header(text, doc.ps[r] if k != K_ALIAS else doc.st[r])
+    return found
+
+
+def _entry_trailing(doc: Doc, loc: E.Loc) -> str | None:
+    """The comment after a mapping entry on its last line."""
+    r = loc.row
+    k = doc.kind[r]
+    text = doc.text
+    if k == K_ALIAS or (k == K_SCALAR and doc.sty[r] not in "|>" and doc.st[r] != doc.en[r]):
         m = _TRAILING(text, doc.en[r])
-        if m and (doc.st[r] != doc.en[r] or k == K_ALIAS):
-            return m.group(1)
-    start = (
-        E.entry_start(doc, loc.key) if loc.key >= 0 else doc.ps[r] if k != K_ALIAS else doc.st[r]
-    )
-    if loc.parent >= 0 and loc.key < 0 and doc.kind[loc.parent] == K_SEQ:
-        start = E.dash_of(doc, loc.parent, loc.index, loc.prev_end)
+    elif k == K_SCALAR and doc.sty[r] in "|>":
+        h = E._HEADER(text, doc.st[r])
+        m = _TRAILING(text, h.end() if h else doc.st[r] + 1)
+    elif k == K_SCALAR or doc.sty[r] == "b":
+        # A null value or a block collection: the comment follows the colon on the key's line.
+        colon = E.colon_after(doc, loc.key)
+        m = _PROPS_TRAILING(text, colon + 1) if colon >= 0 else None
+    else:
+        m = _TRAILING(text, doc.en[r])
+    return m.group(1) if m else None
+
+
+def _closing_column(doc: Doc, start: int) -> int:
+    """The column of the innermost block collection that ends just before ``start`` (the one
+    holding the last content there), or -1."""
+    last = -1
+    for e in doc.en:
+        if last < e <= start:
+            last = e
+    if last <= 0:
+        return -1
+    best = -1
+    for r, k in enumerate(doc.kind):
+        if k in (K_MAP, K_SEQ) and doc.sty[r] == "b" and doc.st[r] <= last - 1 < doc.en[r]:
+            best = r  # rows come in document order, so a later match is a deeper one
+    return E.col(doc.text, doc.st[best]) if best >= 0 else -1
+
+
+def _leading(doc: Doc, start: int) -> str | None:
+    """The comment lines directly above the node that starts at ``start``, blank lines between
+    comments allowed. A comment indented deeper than the node, below a deeper block that ends
+    here, closes that block instead. Where the node is the first thing in the document, a blank
+    line ends the comments (what is above it is the document header)."""
+    text = doc.text
     if not E.only_blanks_before(text, start):
         return None
-    lines = []
+    column = E.col(text, start)
+    found: list[tuple[str, int, bool]] = []  # comment, its indent, a blank line below it
     a = E.line_start(text, start)
-    while a > 0:
+    gap = False
+    top = False
+    while True:
+        if a <= 0:
+            top = True
+            break
         pls = E.prev_line(text, a)
         raw = text[pls:a]
         line = raw.strip(" \t\r\n\ufeff")
-        if not line.startswith("#"):
+        if not line:
+            gap = True
+        elif line.startswith("#"):
+            found.append((line, len(raw) - len(raw.lstrip(" \t")), gap))
+        else:
+            top = line == "---" or line.startswith(("--- ", "---\t", "%"))
             break
-        if loc.index > 0 and len(raw) - len(raw.lstrip(" \t")) > E.col(text, start):
-            break  # indented under the item before: that one's comment
-        lines.append(line)
         a = pls
-    return "\n".join(reversed(lines)) if lines else None
+    closing = None
+    lines = []
+    for line, indent, gap_below in found:
+        if indent > column and not top:
+            if closing is None:
+                closing = _closing_column(doc, start)
+            if closing > column:
+                break
+        lines.append((line, gap_below))
+    if top:
+        lines = [x for x in lines if not x[1]]
+    return "\n".join(x[0] for x in reversed(lines)) if lines else None
+
+
+def _header(text: str, start: int) -> str | None:
+    """The document header: comments before ``---`` or the directives, a comment on the
+    ``---`` line, and the comments above the content that have a blank line after them."""
+    head = text[: E.line_start(text, start)].lstrip("\ufeff")
+    out: list[str] = []
+    pending: list[str] = []  # comments after the marker, kept if a blank line follows them
+    rows = re.split(r"\r\n|\r|\n", head)
+    rows.pop()  # what follows the last line break is not a line
+    for raw in rows:
+        line = raw.strip(" \t")
+        if line.startswith("#"):
+            pending.append(line)
+        elif line == "---" or line.startswith("--- ") or line.startswith("---\t"):
+            out += pending
+            pending = []
+            m = _TRAILING(line, 3)
+            if m:
+                out.append(m.group(1))
+        elif not line or line.startswith("%"):  # a blank line or a directive
+            out += pending
+            pending = []
+        else:
+            pending = []
+    return "\n".join(out) if out else None
 
 
 def _linecol(head: str) -> tuple[int, int]:

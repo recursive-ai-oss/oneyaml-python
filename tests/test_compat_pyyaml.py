@@ -454,7 +454,7 @@ def detail(mod, text, schema, multi=False, limits=None):
     try:
         return "ok", mod.load(text, limits or _api._DEFAULT_LIMITS, multi, schema)
     except oneyaml.YAMLError as exc:
-        return "err", (exc.category, exc.line, exc.column, getattr(exc, "construct", False))
+        return "err", (exc.category, exc.line, exc.column, getattr(exc, "_construct", False))
 
 
 def assert_same_answer(text, schema, multi=False, limits=None, parser_positions=True):

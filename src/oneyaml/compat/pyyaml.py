@@ -325,7 +325,7 @@ def _convert(exc: _BaseError, name: str) -> YAMLError:
         mark = None
         if exc.line is not None and exc.column is not None:
             mark = Mark(name, exc.offset or 0, exc.line - 1, exc.column - 1)
-        if getattr(exc, "construct", False):
+        if getattr(exc, "_construct", False):
             out = ConstructorError(None, None, message, mark)
         elif category == "other" and "more than one document" in message:
             out = ComposerError(
@@ -442,7 +442,7 @@ class _LoaderCore:
                     raise
                 # A value the backend could not build (a tag it does not know, a tag that does
                 # not fit) may be one a callback takes over; every other error stands.
-                if mode == 0 or not getattr(exc, "construct", False):
+                if mode == 0 or not getattr(exc, "_construct", False):
                     raise _convert(exc, self.name) from None
         return self._read_nodes(multi, parsed)
 

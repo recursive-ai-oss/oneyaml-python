@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 __all__ = ["Limits"]
 
@@ -12,6 +12,10 @@ _NONE = (1 << 64) - 1
 
 # A fixed amount, ``(factor, floor)`` for ``max(factor x measured size, floor)``, or None.
 Budget: TypeAlias = "int | tuple[int, int] | None"
+
+
+# Marks a field that ``replace`` leaves as it is (None already means "no limit").
+_KEEP: Any = object()
 
 
 def _pair(value: Budget) -> tuple[int, int]:
@@ -134,13 +138,29 @@ class Limits:
         """No limits at all. Only for input you trust completely."""
         return cls(None, None, None, None, None, None, None)
 
-    def replace(self, **changes) -> Limits:
-        """A copy with some fields changed."""
+    def replace(
+        self,
+        *,
+        depth: int | None = _KEEP,
+        alias_nodes: Budget = _KEEP,
+        alias_bytes: Budget = _KEEP,
+        input_size: int | None = _KEEP,
+        scalar_size: int | None = _KEEP,
+        documents: int | None = _KEEP,
+        int_digits: int | None = _KEEP,
+    ) -> Limits:
+        """A copy with the fields you name changed; the others keep their values."""
+        changes = {
+            "depth": depth,
+            "alias_nodes": alias_nodes,
+            "alias_bytes": alias_bytes,
+            "input_size": input_size,
+            "scalar_size": scalar_size,
+            "documents": documents,
+            "int_digits": int_digits,
+        }
         fields = {name: getattr(self, name) for name in self._FIELDS}
-        unknown = set(changes) - set(fields)
-        if unknown:
-            raise TypeError(f"unknown limit: {', '.join(sorted(unknown))}")
-        fields.update(changes)
+        fields.update({k: v for k, v in changes.items() if v is not _KEEP})
         return Limits(**fields)
 
     _FIELDS = (
