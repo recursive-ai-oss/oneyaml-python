@@ -10,6 +10,7 @@ static MAKE_ERROR: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static TAGGED: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static FROZEN_MAPPING: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static FREEZE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static INT_TEXT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static BIG_INT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 fn lookup<'py>(
@@ -42,4 +43,8 @@ pub fn freeze<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
 
 pub fn big_int<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
     lookup(py, &BIG_INT, "oneyaml._types", "big_int")
+}
+
+pub fn int_text<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
+    lookup(py, &INT_TEXT, "oneyaml._types", "int_text")
 }

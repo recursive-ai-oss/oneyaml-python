@@ -5,10 +5,11 @@ from __future__ import annotations
 from .._errors import YAMLError
 from ._construct import load
 from ._decode import decode
+from ._emit import dump
 from ._events import render
 from ._parser import DEFAULT_MAX_DEPTH, parse_events
 
-__all__ = ["BACKEND", "ENGINE_VERSION", "events_text", "load", "probe"]
+__all__ = ["BACKEND", "ENGINE_VERSION", "dump", "events_text", "load", "probe"]
 
 BACKEND = "pure"
 ENGINE_VERSION: str | None = None

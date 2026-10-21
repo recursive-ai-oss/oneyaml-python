@@ -12,7 +12,7 @@ from importlib.metadata import PackageNotFoundError, version
 from types import ModuleType
 
 from . import _api
-from ._api import load, load_all, loads, loads_all
+from ._api import dump, dump_all, dumps, dumps_all, load, load_all, loads, loads_all
 from ._errors import LimitError, ParseError, YAMLError
 from ._limits import Limits
 from ._types import FrozenMapping, Tagged
@@ -31,6 +31,10 @@ __all__ = [
     "YAMLError",
     "__version__",
     "backend",
+    "dump",
+    "dump_all",
+    "dumps",
+    "dumps_all",
     "engine_version",
     "load",
     "load_all",
