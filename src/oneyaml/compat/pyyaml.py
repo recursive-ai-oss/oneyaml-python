@@ -357,6 +357,8 @@ class _LoaderCore:
                     parsed = impl.parse_stream(data, _api._DEFAULT_LIMITS, self._schema, multi)
                     return impl.build_parsed(parsed, multi, self._schema)
                 return impl.load(data, _api._DEFAULT_LIMITS, multi, self._schema)
+            except _engine.Passthrough as carried:
+                raise carried.error from None
             except _BaseError as exc:
                 # An error a callback raised is PyYAML's already and stands as it is.
                 if isinstance(exc, YAMLError):

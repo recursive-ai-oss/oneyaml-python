@@ -78,6 +78,8 @@ struct Frame<'py, 's> {
     /// Expanded size of the children so far.
     nodes: usize,
     bytes: usize,
+    /// How many nodes had been left to constructors when it opened.
+    holes_at: usize,
 }
 
 /// A node a registered constructor builds. Its events wait in a list, which stands in the
@@ -589,6 +591,7 @@ impl<'py, 's> Builder<'py, 's> {
             slot,
             nodes: 0,
             bytes: 0,
+            holes_at: self.holes.len(),
         });
         Ok(())
     }
@@ -599,6 +602,15 @@ impl<'py, 's> Builder<'py, 's> {
         let Some(f) = self.stack.pop() else {
             return Err(Fail::new("other", "unbalanced collection", self.doc_start));
         };
+        if self.holes.len() > f.holes_at {
+            // A placeholder inside would end up in the discarded object: a merge builds a new
+            // dict, and a tag may copy the entries into a new object.
+            let merging = matches!(&f.body, Body::Map { .. })
+                && matches!(self.pending_merges.last(), Some((d, _)) if *d == depth);
+            if merging || f.tag.is_some() {
+                return Err(Fail::Fallback);
+            }
+        }
         let mut obj: Bound<'py, PyAny> = match f.body {
             Body::Seq(l) => l.into_any(),
             Body::KeySeq(v) => PyTuple::new(py, v)?.into_any(),

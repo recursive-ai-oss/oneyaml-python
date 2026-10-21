@@ -184,6 +184,7 @@ fn drive<'py, 's>(
                 let mut count = 0usize;
                 let mut depth = 0usize;
                 let mut stop = false;
+                let mut count_events = 0usize;
                 let at = ev.span().start;
                 let mut current = Some(ev);
                 // The node and everything below it, up to its own end.
@@ -219,6 +220,10 @@ fn drive<'py, 's>(
                         }
                     }
                     if depth > 0 {
+                        count_events += 1;
+                        if count_events % SIGNAL_EVERY == 0 {
+                            poll_signals(py).map_err(fail)?;
+                        }
                         current = events.next();
                     }
                 }
@@ -232,7 +237,11 @@ fn drive<'py, 's>(
             }
         }
         if let Some(op) = ops::translate(&ev, conv) {
-            builder.feed(op).map_err(fail)?;
+            match builder.feed(op) {
+                Ok(()) => {}
+                Err(Fail::Fallback) => return Ok(None),
+                Err(f) => return Err(fail(f)),
+            }
         }
     }
     builder.resolve_holes(&build).map_err(fail)?;

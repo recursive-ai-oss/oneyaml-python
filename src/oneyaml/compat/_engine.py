@@ -382,7 +382,20 @@ class _Hooks:
             docs = _compose(loader, wrapped, source, False, self.depth, self.budget)
         except Fail as exc:
             raise _error_at(source.text, exc) from None
-        return loader._build(docs[0])
+        try:
+            return loader._build(docs[0])
+        except _BaseError as exc:
+            # Raised by a callback (it called the library itself): it reaches the caller as it
+            # is, neither converted to this stream's error type nor retried node by node.
+            raise Passthrough(exc) from None
+
+
+class Passthrough(Exception):
+    """Carries an error a callback raised through the backend's load unchanged."""
+
+    def __init__(self, error: _BaseError) -> None:
+        super().__init__()
+        self.error = error
 
 
 def _error_at(text: str, exc: Fail) -> _BaseError:

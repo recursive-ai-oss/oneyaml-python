@@ -289,6 +289,14 @@ HYBRID_DOCS = {
     "tagged node as a merge value": "base: &b {x: 1}\nm:\n  <<: !m {y: 2}\n  z: 3\n",
     "tagged node inside a merge list": "m:\n  <<: [!m {y: 2}]\n  z: 1\n",
     "merge inside a tagged node": "b: &b {x: 1}\nm: !m\n  <<: *b\n  y: 2\n",
+    "hole in a mapping that merges": "m:\n  <<: {x: 1}\n  a: !t v\n",
+    "hole before an inline merge": "m: {a: !t v, <<: {a: 1}}\n",
+    "hole in the root mapping that merges": "<<: {x: 1}\na: !t v\n",
+    "hole in a mapping that merges an anchor": "b: &b {x: 1}\nm:\n  <<: *b\n  a: !t v\n",
+    "hole in an omap": "!!omap [ {a: !t v} ]\n",
+    "hole in an omap value": "x: !!omap\n  - a: !t v\n  - b: 2\n",
+    "hole in pairs": "!!pairs [ {a: !t v} ]\n",
+    "hole in a set": "!!set {a: !t v}\n",
     "several documents": "!t a\n---\n!t b\n",
     "non-ASCII text": "é: !t ü\nz: !t ß\n",
     "carriage returns": "a: !t x\r\nb: !t y\r\n",
@@ -586,3 +594,60 @@ def test_a_pending_signal_ends_a_hooked_load(big):
     finally:
         signal.signal(signal.SIGINT, old)
     assert cy.load("a: !t x\n", ours_cls) == {"a": Point(("scalar", "x"))}
+
+
+def _errors_from_callbacks(impl, category):
+    from oneyaml._errors import make_error
+
+    calls = []
+
+    class M(cy.SafeLoader):
+        pass
+
+    def first(ld, node):
+        calls.append("first")
+        return 1
+
+    def bad(ld, node):
+        calls.append("bad")
+        raise make_error("inner failure", category, 1, 1, 0)
+
+    M.add_constructor("!first", first)
+    M.add_constructor("!bad", bad)
+    old = _api._impl
+    _api._impl = impl
+    try:
+        with pytest.raises(Exception) as e:
+            cy.load("a: !first x\nb: !bad y\n", M)
+    finally:
+        _api._impl = old
+    return type(e.value), e.value.message, calls
+
+
+@pytest.mark.native_only
+@pytest.mark.parametrize("category", ["syntax", "construct"])
+def test_an_error_a_callback_raises_reaches_the_caller_as_it_is(category):
+    from oneyaml import _pure
+
+    native = _errors_from_callbacks(_native(), category)
+    assert native == _errors_from_callbacks(_pure, category)
+    assert native[2] == ["first", "bad"]
+    assert not issubclass(native[0], cy.YAMLError)
+
+
+@pytest.mark.native_only
+def test_a_pending_signal_ends_the_read_of_one_big_tagged_node(big):
+    import signal
+
+    _, ours_cls = _loaders()
+    ran = []
+    ours_cls.add_constructor("!m", lambda ld, n: ran.append(1))
+    text = "!m\n" + "".join(f"k{i}: v\n" for i in range(20000))
+    big._test_hook(INTERRUPT)
+    old = signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            cy.load(text, ours_cls)
+    finally:
+        signal.signal(signal.SIGINT, old)
+    assert not ran
