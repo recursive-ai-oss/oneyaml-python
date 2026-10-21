@@ -118,6 +118,14 @@ NATIVE_ENGINE_DEVIATIONS = {
 }
 
 
+# Document tests on which the native engine differs (the pure backend passes them).
+NATIVE_DOCUMENT_DEVIATIONS = {
+    "test_a_string_added_next_to_double_quoted_values_is_double_quoted": (
+        "the engine's insert does not copy the siblings' quoting yet: "
+        "own:edit/add-key-double-quoted-siblings"
+    ),
+}
+
 _DEVIATION_MODULES = ("test_pure_events", "test_load", "test_load_edges")
 
 
@@ -133,6 +141,10 @@ def _native_engine_deviation(item):
 
 def _mark_native_engine_deviations(items):
     for item in items:
+        spec = getattr(item, "callspec", None)
+        why = NATIVE_DOCUMENT_DEVIATIONS.get(item.originalname)
+        if why and spec is not None and spec.id.startswith("native"):
+            item.add_marker(pytest.mark.xfail(strict=True, reason=why))
         case = _native_engine_deviation(item)
         if case is not None:
             item.add_marker(

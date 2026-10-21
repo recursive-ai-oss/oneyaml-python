@@ -7,6 +7,7 @@ pointer of an operation is read here (RFC 6901); the edits themselves are in ``_
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .._errors import PatchError
@@ -16,6 +17,7 @@ from . import _edit as E
 from . import _tree as T
 from ._tree import K_ALIAS, K_MAP, K_SEQ, Doc
 
+_SURROGATE = re.compile("[\ud800-\udfff]").search
 _OPS = ("add", "remove", "replace", "move", "copy", "test")
 
 
@@ -23,6 +25,8 @@ def parse_pointer(s: Any) -> list[str]:
     """The tokens of an RFC 6901 pointer string."""
     if not isinstance(s, str):
         raise E.refuse("patch-invalid", "a path must be a string")
+    if not s.isascii() and _SURROGATE(s):
+        raise E.refuse("patch-invalid", "the pointer holds a lone surrogate, which is not text")
     if s == "":
         return []
     if s[0] != "/":
@@ -306,9 +310,9 @@ def check_op(i: int, op: Any) -> tuple[str, dict]:
     return name, op
 
 
-def apply_patch(doc: Doc, ops: list[dict], limits: Any) -> None:
+def apply_patch(doc: Doc, ops: list[dict], limits: Any) -> bool:
     """Apply ``ops`` to ``doc``; on any failure the document is as it was and ``PatchError``
-    names the operation."""
+    names the operation. True when an operation other than ``test`` ran."""
     snap = Snapshot(doc)
     p = Patcher(doc, limits)
     i = 0
@@ -335,6 +339,7 @@ def apply_patch(doc: Doc, ops: list[dict], limits: Any) -> None:
         if isinstance(exc, PatchError) and exc.index is None:
             exc.index = i
         raise
+    return any(isinstance(op, dict) and op.get("op") != "test" for op in ops)
 
 
 def apply_merge(doc: Doc, patch: Any, limits: Any) -> None:
@@ -344,8 +349,6 @@ def apply_merge(doc: Doc, patch: Any, limits: Any) -> None:
         p.merge(patch)
         if p.size_cap is not None and len(doc.text.encode("utf-8", "surrogatepass")) > p.size_cap:
             raise E.refuse("limit", "the result is over the input size limit")
-    except BaseException as exc:
+    except BaseException:
         snap.restore()
-        if isinstance(exc, PatchError) and exc.index is None:
-            exc.index = 0
         raise

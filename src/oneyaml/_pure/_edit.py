@@ -35,6 +35,10 @@ def refuse(category: str, message: str) -> PatchError:
     return PatchError(message, category=category)
 
 
+class ThroughAlias(Exception):
+    """A path went through an alias where it may not (the handle turns it into the error)."""
+
+
 # ---- text helpers ---------------------------------------------------------------------------
 
 
@@ -128,29 +132,44 @@ class Loc:
         self.token: str | None = None
 
 
+def is_index_text(tok: str) -> bool:
+    return tok.isascii() and tok.isdigit() and (tok == "0" or tok[0] != "0")
+
+
 def parse_index(tok: str) -> int:
-    if tok.isascii() and tok.isdigit() and (tok == "0" or tok[0] != "0"):
-        return int(tok)
-    return -1
+    return int(tok) if is_index_text(tok) else -1
 
 
-def locate(doc: Doc, tokens: list[str]) -> Loc:
-    """Find the node at ``tokens``; raises ``patch-path`` or ``refused-ambiguous``."""
+def locate(doc: Doc, tokens: list, view: bool = False, follow: bool = True) -> Loc:
+    """Find the node at ``tokens``.
+
+    Pointer tokens (the default) are the text of a key or an index: a miss is ``patch-path``
+    and two keys that read as one text are ``refused-ambiguous``. With ``view`` the tokens are
+    those of the lossless handle (see ``_tree.find_entry``) and a miss is a ``KeyError`` or
+    ``IndexError``, as for a Python mapping or list. Without ``follow`` an alias met on the
+    way down is refused."""
     loc = Loc()
     row = 0
     kind = doc.kind
     for tok in tokens:
         r = row
         if kind[r] == K_ALIAS:
+            if not follow:
+                raise ThroughAlias
             r = T.alias_map(doc)[r]
             loc.alias = True
         k = kind[r]
         if k == K_MAP:
-            v, kr = T.find_member(doc, r, tok)
+            if view:
+                v, kr = T.find_entry(doc, r, tok)
+            else:
+                v, kr = T.find_member(doc, r, tok)
             if v == -1:
+                if view:
+                    raise KeyError(_shown(tok))
                 raise refuse("patch-path", f"no key {tok!r}")
             if v == -2:
-                raise refuse("refused-ambiguous", f"more than one key reads {tok!r}")
+                raise refuse("refused-ambiguous", f"more than one key reads {_shown(tok)!r}")
             loc.anc.append(r)
             loc.parent = r
             loc.key = kr
@@ -159,9 +178,17 @@ def locate(doc: Doc, tokens: list[str]) -> Loc:
         elif k == K_SEQ:
             i = tok if type(tok) is int else parse_index(tok) if type(tok) is str else -1
             if i < 0:
+                if view:
+                    if type(tok) is int or (type(tok) is str and is_index_text(tok)):
+                        raise IndexError(f"index {tok} is out of range")
+                    raise KeyError(_shown(tok))
                 raise refuse("patch-path", f"{tok!r} is not an index of a sequence")
             c, pe = item_at(doc, r, i)
             if c < 0:
+                if view:
+                    raise IndexError(
+                        f"index {i} is out of range for a sequence of {T.count_items(doc, r)} items"
+                    )
                 raise refuse("patch-path", f"index {i} is out of range")
             loc.anc.append(r)
             loc.parent = r
@@ -170,10 +197,22 @@ def locate(doc: Doc, tokens: list[str]) -> Loc:
             loc.prev_end = pe
             row = c
         else:
+            if view:
+                raise KeyError(f"{_shown(tok)}: the node is a scalar, not a collection")
             raise refuse("patch-path", f"cannot go into a scalar at {tok!r}")
         loc.token = tok
     loc.row = row
     return loc
+
+
+def _shown(tok: Any) -> str:
+    """A token as Python shows a missing key."""
+    if isinstance(tok, str):
+        return tok
+    try:
+        return repr(tok)
+    except ValueError:  # an integer with too many digits to print
+        return f"an integer of {tok.bit_length()} bits"
 
 
 def item_at(doc: Doc, row: int, index: int) -> tuple[int, int]:
@@ -559,7 +598,9 @@ def tag_survives(tag: str | None, value: Any) -> bool:
         return isinstance(value, str)
     core = _CORE_SCALAR_TAGS.get(tag)
     if core is None:
-        return not tag.startswith(_YAML)
+        # A local or foreign tag stays on a string; on any other value it would change what
+        # the value reads back as.
+        return not tag.startswith(_YAML) and isinstance(value, str)
     if core == "str":
         return isinstance(value, str)
     if core == "int":
@@ -938,7 +979,7 @@ def insert_member(doc: Doc, loc: Loc, key: str, value: Any) -> None:
     p = loc.row
     if loc.alias:
         raise refuse("refused-alias", "the path goes through an alias")
-    v, kr = T.find_member(doc, p, key)
+    v, kr = T.find_member(doc, p, key) if isinstance(key, str) else (-1, -1)
     if v == -2:
         raise refuse("refused-ambiguous", f"more than one key reads {key!r}")
     if v >= 0:

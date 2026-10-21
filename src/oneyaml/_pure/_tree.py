@@ -22,7 +22,7 @@ from typing import Any
 
 from .._errors import YAMLError, make_error
 from .._limits import _NONE
-from .._types import Tagged, freeze
+from .._types import FrozenMapping, Tagged, freeze
 from ._decode import detect
 from ._parser import (
     ALIAS,
@@ -345,6 +345,7 @@ def parse_stream(data: Any, limits: Any) -> Parsed:
                     )
     docs, tail = build(text, events)
     _check_tags(text, docs)
+    _check_keys(text, docs)
     return Parsed(docs, tail, codec, bom, limits)
 
 
@@ -366,6 +367,66 @@ def _check_tags(text: str, docs: list[Doc]) -> None:
                 raise _err(text, base + exc.offset, exc.message, exc.category) from None
             except ValueError:
                 pass  # a number too long for int(): the read reports it under the limits
+        base += len(doc.text)
+
+
+def _check_keys(text: str, docs: list[Doc]) -> None:
+    """Refuse a mapping that has one key twice (``duplicate-key``) or two keys a Python mapping
+    cannot tell apart (``1``, ``1.0``, ``true``), as ``loads`` does."""
+    base = 0
+    for doc in docs:
+        kind = doc.kind
+        val = doc.val
+        sz = doc.sz
+        sty = doc.sty
+        tag = doc.tag
+        for row in range(len(kind)):
+            if kind[row] != K_MAP or sz[row] < 5:  # fewer than two entries
+                continue
+            end = row + sz[row]
+            j = row + 1
+            texts = []
+            odd = False
+            while j < end:
+                if kind[j] == K_SCALAR:
+                    t = val[j]
+                    texts.append(t)
+                    if sty[j] == ":" or tag[j] is not None:
+                        c = t[:1]
+                        if c in NUMBER_START or c in WORD_START or not c or tag[j] is not None:
+                            odd = True
+                else:
+                    texts.append(None)
+                v = j + sz[j]
+                j = v + sz[v]
+            if not odd and len(set(texts)) == len(texts):
+                continue
+            seen: dict[Any, tuple[Any, int]] = {}
+            wide: dict[int, float] = {}
+            j = row + 1
+            while j < end:
+                v = j + sz[j]
+                if kind[j] == K_SCALAR:
+                    try:
+                        kv = scalar_value(doc, j, None, wide)
+                    except (_Fail, Fail, ValueError):
+                        kv = _NOPE
+                    if wide and type(kv) is float and id(kv) in wide:
+                        raise _err(
+                            text, base + doc.st[j],
+                            "a float key is outside the range of a double and cannot be told "
+                            "apart from its neighbours there", "limit",
+                        )  # fmt: skip
+                    if kv is not _NOPE and kv == kv and not isinstance(kv, (list, dict)):
+                        # 1, 1.0 and true are three keys in a document: the type is part of it
+                        ident = (type(kv), kv)
+                        if ident in seen:
+                            raise _err(
+                                text, base + doc.st[j], "the mapping has a duplicate key",
+                                "duplicate-key",
+                            )  # fmt: skip
+                        seen[ident] = (kv, j)
+                j = v + sz[v]
         base += len(doc.text)
 
 
@@ -417,56 +478,132 @@ def key_text(doc: Doc, row: int) -> str | None:
     return None
 
 
-def find_member(doc: Doc, row: int, token: Any) -> tuple[int, int]:
-    """The value row (and key row) of the mapping member that ``token`` names.
+def find_member(doc: Doc, row: int, token: str) -> tuple[int, int]:
+    """The value row (and key row) of the mapping member whose key reads as the text ``token``
+    (an RFC 6901 pointer token): the text as written, so ``1`` and ``"1"`` both read as ``1``.
 
-    A string token names the key whose text it is (two keys with that text are ambiguous, as the
-    kit requires even when one is a quoted string). Another scalar token (int, float, bool, None)
-    names the key of exactly that value. Returns ``(-1, -1)`` when there is none and ``(-2, -2)``
-    when it is ambiguous."""
+    Returns ``(-1, -1)`` when there is none and ``(-2, -2)`` when two keys read as that text."""
     sz = doc.sz
     kind = doc.kind
     val = doc.val
     j = row + 1
     end = row + sz[row]
-    hits: list[tuple[int, int]] = []
-    if type(token) is not str:
+    hit = (-1, -1)
+    has_alias = False
+    while j < end:
+        v = j + sz[j]
+        if kind[j] == K_SCALAR:
+            if val[j] == token:
+                if hit[0] != -1:
+                    return -2, -2
+                hit = (v, j)
+        elif kind[j] == K_ALIAS:
+            has_alias = True
+        j = v + sz[v]
+    if has_alias:
+        # An alias used as a key is matched under the text of what it names.
+        j = row + 1
+        hit = (-1, -1)
+        while j < end:
+            v = j + sz[j]
+            if kind[j] != K_MAP and kind[j] != K_SEQ and key_text(doc, j) == token:
+                if hit[0] != -1:
+                    return -2, -2
+                hit = (v, j)
+            j = v + sz[v]
+    return hit
+
+
+def strict_eq(a: Any, b: Any) -> bool:
+    """Equality of two key values by YAML identity: types must match (``1``, ``1.0`` and ``true``
+    differ), mappings ignore order. Walks with its own stack."""
+    stack = [(a, b)]
+    while stack:
+        x, y = stack.pop()
+        if type(x) is not type(y):
+            return False
+        if isinstance(x, tuple):
+            if len(x) != len(y):
+                return False
+            stack.extend(zip(x, y, strict=True))
+        elif isinstance(x, FrozenMapping):
+            if len(x) != len(y):
+                return False
+            for k, v in x.items():
+                if k not in y:
+                    return False
+                stack.append((v, y[k]))
+        elif isinstance(x, float):
+            if not (x == y or (x != x and y != y)):
+                return False
+        elif x != y:
+            return False
+    return True
+
+
+def key_value(doc: Doc, row: int, cap: int | None = None) -> Any:
+    """The Python value of a key row: scalars as they read, collections frozen."""
+    row = follow(doc, row)
+    if doc.kind[row] == K_SCALAR:
+        return scalar_value(doc, row, cap)
+    v = _walk(doc, row, cap, {}, {}, None)
+    return freeze(v, 1 << 62, 1 << 62)[0]
+
+
+def find_entry(doc: Doc, row: int, tok: Any) -> tuple[int, int]:
+    """The value row (and key row) of the mapping entry a view token names.
+
+    A ``str`` names the key that is that string (``"16"`` does not find ``0x10``). Any other
+    token names the key of exactly that value and type: ``1``, ``1.0`` and ``True`` are three
+    keys, a ``tuple`` or ``FrozenMapping`` names a collection key. ``(-1, -1)`` for no entry,
+    ``(-2, -2)`` for two that fit."""
+    sz = doc.sz
+    kind = doc.kind
+    j = row + 1
+    end = row + sz[row]
+    if type(tok) is str:
         while j < end:
             v = j + sz[j]
             t = follow(doc, j)
             if kind[t] == K_SCALAR:
                 try:
                     kv = scalar_value(doc, t, None)
-                except Exception:
+                except (Fail, _Fail, ValueError):
                     kv = _NOPE
-                if type(kv) is type(token) and (kv == token or (kv != kv and token != token)):
-                    hits.append((v, j))
+                if type(kv) is str and kv == tok:
+                    return v, j
             j = v + sz[v]
-    else:
-        has_alias = False
-        while j < end:
-            v = j + sz[j]
-            if kind[j] == K_SCALAR:
-                if val[j] == token:
+        return -1, -1
+    hits = []
+    collection = isinstance(tok, (tuple, FrozenMapping))
+    while j < end:
+        v = j + sz[j]
+        t = follow(doc, j)
+        k = kind[t]
+        if collection:
+            if k != K_SCALAR:
+                try:
+                    ok = strict_eq(key_value(doc, t), tok)
+                except (Fail, _Fail, ValueError):
+                    ok = False
+                if ok:
                     hits.append((v, j))
-            elif kind[j] == K_ALIAS:
-                has_alias = True
-            j = v + sz[v]
-        if has_alias:
-            # An alias used as a key is matched under the text of what it names.
-            j = row + 1
-            hits = []
-            while j < end:
-                v = j + sz[j]
-                if kind[j] != K_MAP and kind[j] != K_SEQ and key_text(doc, j) == token:
-                    hits.append((v, j))
-                j = v + sz[v]
+        elif k == K_SCALAR:
+            try:
+                kv = scalar_value(doc, t, None)
+            except (Fail, _Fail, ValueError):
+                kv = _NOPE
+            if type(kv) is type(tok) and strict_eq(kv, tok):
+                hits.append((v, j))
+        j = v + sz[v]
     if len(hits) > 1:
         return -2, -2
     return hits[0] if hits else (-1, -1)
 
 
 _NOPE = object()
+
+
 _INDEX = re.compile(r"0|[1-9][0-9]*\Z").match
 
 
@@ -502,8 +639,11 @@ def tag_of(doc: Doc, row: int) -> str | None:
 # ---- values ---------------------------------------------------------------------------------
 
 
-def scalar_value(doc: Doc, row: int, cap: int | None) -> Any:
-    """The Core-schema value of a scalar row."""
+def scalar_value(doc: Doc, row: int, cap: int | None, wide: dict | None = None) -> Any:
+    """The Core-schema value of a scalar row. A float outside the range of a double is noted in
+    ``wide`` when one is given."""
+    if wide is None:
+        wide = {}
     v = doc.val[row]
     tag = doc.tag[row]
     try:
@@ -511,11 +651,11 @@ def scalar_value(doc: Doc, row: int, cap: int | None) -> Any:
             if doc.sty[row] == ":":
                 c = v[:1]  # type: ignore[index]
                 if c in NUMBER_START:
-                    return _number(v, cap, {})  # type: ignore[arg-type]
+                    return _number(v, cap, wide)  # type: ignore[arg-type]
                 if c in WORD_START or not c:
                     return KEYWORDS.get(v, v)  # type: ignore[arg-type]
             return v
-        return _tagged_scalar(tag, v, cap, {})  # type: ignore[arg-type]
+        return _tagged_scalar(tag, v, cap, wide)  # type: ignore[arg-type]
     except Fail as exc:
         raise _Fail(exc.message, exc.category, doc.st[row]) from None
 
@@ -640,7 +780,8 @@ def value_of(doc: Doc, row: int, limits: Any) -> Any:
                         todo.append(t)
         charged = [0, 0]
         for t in sorted(need):
-            built[t] = _walk(doc, t, cap, built, am, budget, charged)
+            if t not in built:  # an earlier target held it: keep that one, so sharing holds
+                built[t] = _walk(doc, t, cap, built, am, budget, charged)
         return _walk(doc, row, cap, built, am, budget, charged)
     except _Fail as exc:
         line, col = linecol(doc.text, exc.offset)

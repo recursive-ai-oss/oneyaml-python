@@ -111,7 +111,8 @@ def test_reads(parse):
     assert h.length(0, ["b"]) == 3
     assert h.length(0, []) == 5
     assert h.keys(0, []) == ["a", "b", "c", "d", "e"]
-    assert h.keys(0, ["b"]) == ["0", "1", "2"]
+    with pytest.raises(TypeError):
+        h.keys(0, ["b"])  # only a mapping has keys
     assert h.value(0, ["d"]) == [1, 2]  # an alias reads as what it names
     assert h.value(0, []) == {
         "a": 1,
@@ -125,8 +126,7 @@ def test_reads(parse):
 def test_info(parse):
     h = parse(DOC)
     assert h.info(0, ["a"]) == ("plain", None, None, None, 1, 4)
-    style, _tag, _anchor, comment, line, col = h.info(0, ["e"])
-    assert (style, comment, line, col) == ("single", "# note", 8, 4)
+    assert h.info(0, ["e"]) == ("single-quoted", None, None, None, 8, 4)
     assert h.info(0, ["c"])[:3] == ("flow", None, "anc")
     assert h.info(0, ["d"])[0] == "alias"
     assert h.info(0, ["b"])[0] == "block"
@@ -135,7 +135,8 @@ def test_info(parse):
 def test_non_string_tokens(parse):
     h = parse("1: a\ntrue: b\n2.5: c\nl: [x, y]\n")
     assert h.value(0, [1]) == "a"
-    assert h.value(0, ["1"]) == "a"
+    with pytest.raises(KeyError):
+        h.value(0, ["1"])  # a text token names a string key only
     assert h.value(0, [True]) == "b"
     assert h.value(0, [2.5]) == "c"
     assert h.value(0, ["l", 1]) == "y"
@@ -145,33 +146,34 @@ def test_multi_document_reads(parse):
     h = parse("a: 1\n---\nb: 2\n---\n- c\n")
     assert h.count() == 3
     assert [h.value(i, []) for i in range(3)] == [{"a": 1}, {"b": 2}, ["c"]]
-    with pytest.raises(PatchError) as info:
+    with pytest.raises(IndexError):
         h.value(3, [])
-    assert info.value.category == "patch-path"
 
 
 @pytest.mark.parametrize(
-    ("path", "category"),
-    [(["zz"], "patch-path"), (["b", 9], "patch-path"), (["a", "x"], "patch-path")],
+    ("path", "error"),
+    [(["zz"], KeyError), (["b", 9], IndexError), (["a", "x"], KeyError), (["b", "x"], KeyError)],
 )
-def test_read_errors(parse, path, category):
-    with pytest.raises(PatchError) as info:
+def test_read_errors(parse, path, error):
+    with pytest.raises(error):
         parse(DOC).value(0, path)
-    assert info.value.category == category
 
 
-def test_duplicate_keys_are_found_when_read(parse):
-    h = parse("a: 1\na: 2\n")
-    assert h.emit() == b"a: 1\na: 2\n"
+def test_duplicate_keys_are_refused_at_parse(parse):
     with pytest.raises(YAMLError) as info:
-        h.value(0, [])
-    assert info.value.category == "duplicate-key"
+        parse("a: 1\nb: 2\na: 3\n")
+    assert (info.value.category, info.value.line, info.value.column) == ("duplicate-key", 3, 1)
+    parse("1: a\n1.0: b\ntrue: c\n")  # three different keys
 
 
-def test_ambiguous_key_text_is_refused(parse):
+def test_ambiguous_key_text_is_refused_by_pointers_only(parse):
     h = parse('80: a\n"80": c\n')
+    assert h.value(0, [80]) == "a" and h.value(0, ["80"]) == "c"  # exact tokens tell them apart
     with pytest.raises(PatchError) as info:
-        h.set(0, ["80"], "x")
+        h.patch(0, [{"op": "replace", "path": "/80", "value": "x"}])
+    assert info.value.category == "refused-ambiguous"
+    with pytest.raises(PatchError) as info:
+        h.resolve(0, "/80")
     assert info.value.category == "refused-ambiguous"
     assert h.emit() == b'80: a\n"80": c\n'
 
@@ -206,7 +208,7 @@ def test_set_a_collection_in_block_style(parse):
 
 def test_set_and_insert_keep_the_line_break_style(parse):
     h = parse("a: 1\r\nb: 2\r\n")
-    h.insert(0, [], "c", [1, 2])
+    h.set(0, ["c"], [1, 2])
     h.set(0, ["a"], "multi\nline")
     out = h.emit().decode()
     assert out.count("\r\n") == out.count("\n")
@@ -215,7 +217,7 @@ def test_set_and_insert_keep_the_line_break_style(parse):
 
 def test_insert_member_and_item(parse):
     h = parse("a: 1\nl:\n  - x\n")
-    h.insert(0, [], "b", 2)
+    h.set(0, ["b"], 2)  # a new key
     h.insert(0, ["l"], 1, "y")
     h.insert(0, ["l"], 0, "w")
     h.insert(0, ["l"], 99, "end")  # past the end appends
@@ -224,10 +226,10 @@ def test_insert_member_and_item(parse):
 
 def test_insert_into_flow_and_empty_collections(parse):
     h = parse("a: {x: 1}\nb: [1]\nc: []\nd: {}\n")
-    h.insert(0, ["a"], "y", 2)
-    h.insert(0, ["b"], None, 2)
+    h.set(0, ["a", "y"], 2)
+    h.insert(0, ["b"], 9, 2)
     h.insert(0, ["c"], 0, "k")
-    h.insert(0, ["d"], "z", 1)
+    h.set(0, ["d", "z"], 1)
     assert h.value(0, []) == {"a": {"x": 1, "y": 2}, "b": [1, 2], "c": ["k"], "d": {"z": 1}}
     assert h.emit().startswith(b"a: {x: 1, y: 2}\nb: [1, 2]\n")
 
@@ -273,7 +275,7 @@ def test_a_keep_scalar_ending_a_document_counts_the_blank_lines_before_the_next(
 
 def test_a_comment_after_the_last_entry_stays_after_a_new_block_scalar(parse):
     h = parse("a: 1\nb:\n  - x\n  # note\n")
-    h.insert(0, [], "c", "multi\nline")
+    h.set(0, ["c"], "multi\nline")
     assert h.value(0, ["c"]) == "multi\nline"
     assert b"# note" in h.emit()
 
@@ -291,43 +293,58 @@ def test_tags_and_binary_values(parse):
     h.set(0, ["b"], 7)
     h.set(0, ["c"], b"\x00\x01")
     assert h.value(0, ["c"]) == b"\x00\x01"
-    assert b"b: !t 7\n" in h.emit()  # a custom tag stays on a value it can describe
+    assert b"b: 7\n" in h.emit()  # a custom tag does not describe a number: it goes
 
 
 def test_edit_refusals(parse):
     src = "a: &x [1, 2]\nb: *x\nc: &y 1\nd:\n  - *y\ne: 3\n"
     h = parse(src)
     cases = [
-        (lambda: h.set(0, ["b", 0], 9), "refused-alias"),  # a write through an alias
-        (lambda: h.insert(0, ["b"], None, 9), "refused-alias"),
-        (lambda: h.remove(0, ["a"]), "refused-alias"),  # the anchor is used elsewhere
-        (lambda: h.remove(0, ["c"]), "refused-alias"),
-        (lambda: h.set(0, ["zz"], 1), "patch-path"),
-        (lambda: h.remove(0, []), "patch-invalid"),
-        (lambda: h.insert(0, ["e"], "k", 1), "patch-path"),
+        (lambda: h.set(0, ["b", 0], 9), YAMLError, "refused-alias"),  # a write through an alias
+        (lambda: h.insert(0, ["b"], 0, 9), YAMLError, "refused-alias"),
+        (lambda: h.remove(0, ["b", 0]), YAMLError, "refused-alias"),
+        (lambda: h.remove(0, ["a"]), YAMLError, "refused-alias"),  # the anchor is used elsewhere
+        (lambda: h.remove(0, ["c"]), YAMLError, "refused-alias"),
+        (lambda: h.set(0, ["e", "k"], 1), KeyError, None),  # a scalar has no members
+        (lambda: h.set(0, ["d", 5], 1), IndexError, None),
+        (lambda: h.remove(0, ["zz"]), KeyError, None),
+        (lambda: h.remove(0, []), TypeError, None),
+        (lambda: h.insert(0, ["e"], 0, 1), TypeError, None),
+        (lambda: h.set(0, ["a"], object()), TypeError, None),
     ]
-    for call, category in cases:
-        with pytest.raises(PatchError) as info:
+    for call, error, category in cases:
+        with pytest.raises(error) as info:
             call()
-        assert info.value.category == category
+        if category:
+            assert info.value.category == category
         assert h.emit() == src.encode()  # a refused edit changes nothing
     h.remove(0, ["b"])  # the alias itself can go
     assert h.value(0, ["a"]) == [1, 2]
 
 
-def test_version_changes_with_every_edit(parse):
+def test_version_moves_when_nodes_move(parse):
     h = parse("a: [1, 2]\nb: 1\n")
-    seen = [h.version()]
-    for edit in (
-        lambda: h.set(0, ["b"], 2),
-        lambda: h.insert(0, ["a"], 0, 0),
-        lambda: h.remove(0, ["a", 0]),
-        lambda: h.patch(0, [{"op": "add", "path": "/c", "value": 1}]),
-        lambda: h.merge_patch(0, {"c": None}),
-    ):
-        edit()
-        seen.append(h.version())
-    assert len(set(seen)) == len(seen)
+    v = h.version()
+    h.set(0, ["b"], 2)  # a scalar replaced
+    h.set(0, ["c"], 3)  # a key added
+    h.insert(0, ["a"], 2, 3)  # appended: nothing moves
+    assert h.version() == v
+    h.insert(0, ["a"], 0, 0)
+    assert h.version() > v
+    v = h.version()
+    h.set(0, ["a"], [1])
+    assert h.version() > v
+    v = h.version()
+    h.remove(0, ["c"])
+    assert h.version() > v
+    v = h.version()
+    h.patch(0, [{"op": "test", "path": "/b", "value": 2}])  # reads only
+    assert h.version() == v
+    h.patch(0, [{"op": "add", "path": "/c", "value": 1}])
+    assert h.version() > v
+    v = h.version()
+    h.merge_patch(0, {"c": None})
+    assert h.version() > v
 
 
 def test_str_of_an_edited_stream_is_its_text(parse):
