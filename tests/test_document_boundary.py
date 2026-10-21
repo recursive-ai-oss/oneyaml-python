@@ -1,6 +1,9 @@
 """The edge between a document and the Python values handed to it, and how pointers and
 views name keys."""
 
+import _thread
+import itertools
+import signal
 import threading
 from collections.abc import Sequence
 
@@ -120,19 +123,54 @@ def test_the_budget_is_the_documents_own(api):
     assert str(loose).count("- x") == 2**12
 
 
-def test_a_long_conversion_hears_ctrl_c(api):
-    import _thread
+class CtrlCInside(Sequence):
+    """A sequence whose items come from C iterators only, so the interrupt raised part way waits
+    in the interpreter until the library next looks for it (as a Ctrl-C does during a long
+    conversion), and cannot surface in Python code of the test's own."""
 
-    doc = oneyaml.parse("a: 1\n")
-    big = [0] * 6_000_000
-    timer = threading.Timer(0.05, _thread.interrupt_main)
-    timer.start()
+    TOTAL = 200_000
+    AT = 5_000
+    tail = None
+
+    def __len__(self):
+        return self.TOTAL
+
+    def __getitem__(self, i):
+        return i
+
+    def __iter__(self):
+        self.tail = iter(range(self.AT, self.TOTAL))
+        return itertools.chain(
+            range(self.AT), map(_thread.interrupt_main, [signal.SIGINT]), self.tail
+        )
+
+    def left_unread(self):
+        return self.tail.__length_hint__()
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="signals reach the main thread",
+)
+@pytest.mark.parametrize("how", ["set", "insert", "append", "patch", "merge_patch"])
+def test_a_long_conversion_hears_ctrl_c(api, how):
+    def handler(signum, frame):
+        raise KeyboardInterrupt
+
+    doc = oneyaml.parse("a: 1\nl: []\n")
+    before = str(doc)
+    value = CtrlCInside()
+    old = signal.signal(signal.SIGINT, handler)
     try:
         with pytest.raises(KeyboardInterrupt):
-            doc.merge_patch({"a": big})
+            assign(doc, how, value)
     finally:
-        timer.cancel()
-    assert str(doc) == "a: 1\n", "the edit must not go through after the interrupt"
+        signal.signal(signal.SIGINT, old)
+    # The conversion stopped part way: it looked for the signal while it was reading the items.
+    assert value.left_unread() > 0, "the conversion read every item before it heard the interrupt"
+    assert str(doc) == before, "the edit must not go through after the interrupt"
+    doc["a"] = 2  # the document is still usable and nothing is left pending
+    assert str(doc) == before.replace("a: 1", "a: 2")
 
 
 # ---- a patch given as text obeys the document's limits -----------------------------------------
