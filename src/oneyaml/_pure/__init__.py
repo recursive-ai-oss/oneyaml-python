@@ -4,14 +4,26 @@ from __future__ import annotations
 
 from .._errors import YAMLError
 from . import _emit
+from ._construct import build as build_parsed
 from ._construct import load
+from ._construct import parse as parse_stream
 from ._decode import decode
 from ._emit import dump
 from ._events import render
 from ._handle import parse
 from ._parser import DEFAULT_MAX_DEPTH, parse_events
 
-__all__ = ["BACKEND", "ENGINE_VERSION", "dump", "events_text", "load", "parse", "probe"]
+__all__ = [
+    "BACKEND",
+    "ENGINE_VERSION",
+    "build_parsed",
+    "dump",
+    "events_text",
+    "load",
+    "parse",
+    "parse_stream",
+    "probe",
+]
 
 BACKEND = "pure"
 ENGINE_VERSION: str | None = None

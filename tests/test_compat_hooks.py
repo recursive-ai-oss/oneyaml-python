@@ -98,18 +98,20 @@ def build(module, program, base_name="SafeLoader"):
     return PROGRAMS[program](module, loader)
 
 
-def run(module, error, loader, text):
+def run(module, error, loader, text, single=False):
+    if single:
+        return outcome(lambda t: canon(module.load(t, loader)), text, error)
     return outcome(lambda t: canon(list(module.load_all(t, loader))), text, error)
 
 
-def answers(program, texts, base_name="SafeLoader"):
+def answers(program, texts, base_name="SafeLoader", single=False):
     """The texts on which the library and PyYAML answer differently: (text, ours, theirs)."""
     theirs_loader = build(yaml, program, base_name)
     ours_loader = build(cy, program, base_name)
     bad = []
     for text in texts:
-        ref = run(yaml, yaml.YAMLError, theirs_loader, text)
-        got = run(cy, cy.YAMLError, ours_loader, text)
+        ref = run(yaml, yaml.YAMLError, theirs_loader, text, single)
+        got = run(cy, cy.YAMLError, ours_loader, text, single)
         ok = (ref[0] == got[0] == "ok" and same(ref[1], got[1])) or (
             ref[0] != "ok" and got[0] == ref[0] == "err"
         )
@@ -632,7 +634,9 @@ def test_a_loader_with_unused_constructors_reads_through_the_backend(api, monkey
     assert cy.load("a: [1, yes]\n", Mine) == {"a": [1, True]}
     assert not calls
     assert cy.load("a: !s x\n", Mine) == {"a": "S"}
-    assert calls
+    # The native backend builds the document and composes only the node a callback takes over;
+    # the pure one composes the document from the events it already parsed.
+    assert bool(calls) == (api.name == "pure")
     # A syntax error is the backend's, and is reported without building nodes.
     calls.clear()
     with pytest.raises(cy.ParserError):
@@ -769,6 +773,38 @@ DOCS = tagged_documents(400)
 def test_generated_documents_match_pyyaml(api, program):
     bad = unexplained(program, answers(program, DOCS))
     assert not bad, bad[:3]
+
+
+def has_events(value):
+    """Whether a list of event tuples (what stands in for a node a callback has not built yet)
+    is left anywhere in the value."""
+    stack, seen = [value], set()
+    while stack:
+        x = stack.pop()
+        if id(x) in seen:
+            continue
+        seen.add(id(x))
+        if isinstance(x, list) and x and isinstance(x[0], tuple) and type(x[0][0]) is int:
+            return True
+        if isinstance(x, dict):
+            stack.extend(x.keys())
+            stack.extend(x.values())
+        elif isinstance(x, (list, tuple, set, frozenset)):
+            stack.extend(x)
+        elif hasattr(x, "__dict__") and not isinstance(x, type):
+            stack.extend(vars(x).values())
+    return False
+
+
+@pytest.mark.parametrize("program", [*PROGRAMS, *SUBCLASS_PROGRAMS])
+def test_generated_documents_match_pyyaml_through_load(api, program):
+    """A single document goes through the load that builds only the tagged nodes by callback."""
+    bad = unexplained(program, answers(program, DOCS, single=True))
+    assert not bad, bad[:3]
+    loader = build(cy, program)
+    for text in DOCS:
+        with contextlib.suppress(cy.YAMLError):
+            assert not has_events(cy.load(text, loader)), text
 
 
 # ---- the whole corpus --------------------------------------------------------------------------
