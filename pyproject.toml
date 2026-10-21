@@ -25,6 +25,8 @@ dev = [
     "pytest-xdist>=3.6",
     "ruff>=0.9",
     "maturin>=1.9,<2",
+    # The compat tests compare with the real library.
+    "pyyaml==6.0.3",
 ]
 
 [tool.maturin]

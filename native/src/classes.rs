@@ -10,6 +10,9 @@ static MAKE_ERROR: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static TAGGED: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static FROZEN_MAPPING: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static FREEZE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static CONSTRUCT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static REJECT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static SEXAGESIMAL: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static BIG_INT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 fn lookup<'py>(
@@ -42,4 +45,19 @@ pub fn freeze<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
 
 pub fn big_int<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
     lookup(py, &BIG_INT, "oneyaml._types", "big_int")
+}
+
+/// The function that builds the values of the YAML 1.1 mode's tags.
+pub fn construct<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
+    lookup(py, &CONSTRUCT, "oneyaml._yaml11", "construct")
+}
+
+/// The exception that function raises for a value that does not fit its tag.
+pub fn reject<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
+    lookup(py, &REJECT, "oneyaml._yaml11", "Reject")
+}
+
+/// Base-60 integers too long for 64 bits.
+pub fn sexagesimal<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
+    lookup(py, &SEXAGESIMAL, "oneyaml._yaml11", "sexagesimal_int")
 }

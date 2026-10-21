@@ -19,7 +19,7 @@ use crate::errors::{Fail, panic_message, to_pyerr};
 use crate::hook;
 use crate::input::with_text;
 use crate::limits::Lim;
-use crate::ops::{self, Op, Prop};
+use crate::ops::{self, Conv, Mode, Op, Prop};
 
 /// Mapping keys longer than this are not cached: the cache is for the short, repeated names of
 /// a config file, and must not grow with hostile input.
@@ -78,12 +78,18 @@ struct Frame<'py, 's> {
     /// Expanded size of the children so far.
     nodes: usize,
     bytes: usize,
+    /// Mappings named by `<<` keys, in the order they are applied (later ones first, so that the
+    /// first one listed wins). Empty outside the YAML 1.1 mode.
+    merges: Vec<Bound<'py, PyDict>>,
 }
 
 struct Builder<'py, 's> {
     py: Python<'py>,
     lim: Lim,
+    mode: Mode,
     multi: bool,
+    /// The key object that stands for a `<<` until its value arrives.
+    merge_marker: Option<Bound<'py, PyAny>>,
     stack: Vec<Frame<'py, 's>>,
     root: Option<Bound<'py, PyAny>>,
     docs: Vec<Bound<'py, PyAny>>,
@@ -109,10 +115,12 @@ struct Builder<'py, 's> {
 type R<T> = Result<T, Fail>;
 
 impl<'py, 's> Builder<'py, 's> {
-    fn new(py: Python<'py>, lim: Lim, multi: bool) -> Self {
+    fn new(py: Python<'py>, lim: Lim, multi: bool, mode: Mode) -> Self {
         Builder {
             py,
             lim,
+            mode,
+            merge_marker: None,
             multi,
             stack: Vec::new(),
             root: None,
@@ -187,7 +195,7 @@ impl<'py, 's> Builder<'py, 's> {
                 self.nodes += 1;
                 let (mut obj, bytes) = self.scalar(inner)?;
                 if let Some(tag) = custom {
-                    obj = classes::tagged(self.py)?.call1((tag.as_ref(), obj))?;
+                    obj = self.tagged(&tag, obj, at)?;
                 }
                 if let Some(name) = anchor {
                     self.anchors.insert(name, self.slots.len());
@@ -210,6 +218,7 @@ impl<'py, 's> Builder<'py, 's> {
                     | Op::Float(_, at)
                     | Op::Str(_, at)
                     | Op::Num(_, _, at)
+                    | Op::Merge(at)
                     | Op::Bytes(_, at) => *at,
                     _ => 0,
                 };
@@ -229,6 +238,18 @@ impl<'py, 's> Builder<'py, 's> {
                 (self.string(text, at_key), n)
             }
             Op::Null(_) => (py.None().into_bound(py), 0),
+            Op::Merge(_) => {
+                // Only a key of a block of the document itself is a merge key; elsewhere `<<`
+                // is the text it spells.
+                if self.at_merge_key() {
+                    let marker = self
+                        .merge_marker
+                        .get_or_insert_with(|| PyList::empty(py).into_any());
+                    (marker.clone(), 0)
+                } else {
+                    (PyString::new(py, "<<").into_any(), 2)
+                }
+            }
             Op::Bool(b, _) => (PyBool::new(py, b).to_owned().into_any(), 0),
             Op::Int(i, _) => {
                 let Ok(v) = i.into_pyobject(py);
@@ -255,6 +276,38 @@ impl<'py, 's> Builder<'py, 's> {
         })
     }
 
+    /// Whether the next node is a key of a mapping.
+    fn at_merge_key(&self) -> bool {
+        match self.stack.last() {
+            Some(f) => matches!(&f.body, Body::Map { key, .. } if key.is_none()),
+            None => false,
+        }
+    }
+
+    /// Apply a tag: the Core schema keeps what it does not know as `Tagged`; the YAML 1.1 mode
+    /// lets a Python function build the value.
+    fn tagged(&self, tag: &str, obj: Bound<'py, PyAny>, at: usize) -> R<Bound<'py, PyAny>> {
+        let py = self.py;
+        if self.mode == Mode::Core {
+            return Ok(classes::tagged(py)?.call1((tag, obj))?);
+        }
+        match classes::construct(py)?.call1((tag, obj)) {
+            Ok(v) => Ok(v),
+            Err(e) if e.is_instance(py, classes::reject(py)?) => {
+                let v = e.value(py);
+                let message: String = v.getattr("message")?.extract()?;
+                let category: String = v.getattr("category")?.extract()?;
+                let category = if category == "limit" {
+                    "limit"
+                } else {
+                    "construct"
+                };
+                Err(Fail::new(category, message, at))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// A `str`, shared with earlier equal keys of this load when it is a key.
     fn string(&mut self, text: Cow<'s, str>, at_key: bool) -> Bound<'py, PyAny> {
         if at_key && let Cow::Borrowed(s) = &text {
@@ -278,6 +331,9 @@ impl<'py, 's> Builder<'py, 's> {
     fn big_int(&self, text: &str, base: u32) -> R<Bound<'py, PyAny>> {
         let py = self.py;
         let int = py.get_type::<PyInt>();
+        if base == 60 {
+            return Ok(classes::sexagesimal(py)?.call1((text,))?);
+        }
         if base != 10 {
             return Ok(int.call1((text, base))?);
         }
@@ -333,6 +389,7 @@ impl<'py, 's> Builder<'py, 's> {
             slot,
             nodes: 0,
             bytes: 0,
+            merges: Vec::new(),
         });
         Ok(())
     }
@@ -346,6 +403,18 @@ impl<'py, 's> Builder<'py, 's> {
             Body::Seq(l) => l.into_any(),
             Body::KeySeq(v) => PyTuple::new(py, v)?.into_any(),
             Body::Map { dict, .. } => {
+                let dict = if f.merges.is_empty() {
+                    dict
+                } else {
+                    // Merged entries first, then the mapping's own: its keys keep the merged
+                    // keys' places and replace their values.
+                    let merged = PyDict::new(py);
+                    for m in &f.merges {
+                        merged.update(m.as_mapping())?;
+                    }
+                    merged.update(dict.as_mapping())?;
+                    merged
+                };
                 if f.key_mode {
                     classes::frozen_mapping(py)?.call1((dict,))?
                 } else {
@@ -354,7 +423,7 @@ impl<'py, 's> Builder<'py, 's> {
             }
         };
         if let Some(t) = &f.tag {
-            obj = classes::tagged(py)?.call1((t.as_ref(), obj))?;
+            obj = self.tagged(t, obj, f.start)?;
         }
         if f.key_mode {
             self.key_depth -= 1;
@@ -461,6 +530,8 @@ impl<'py, 's> Builder<'py, 's> {
         nodes: usize,
         bytes: usize,
     ) -> R<()> {
+        let compat = self.mode != Mode::Core;
+        let marker = self.merge_marker.clone();
         let Some(f) = self.stack.last_mut() else {
             self.root = Some(obj);
             return Ok(());
@@ -474,6 +545,11 @@ impl<'py, 's> Builder<'py, 's> {
             Body::Map { dict, key } => match key.take() {
                 None => *key = Some((obj, at)),
                 Some((k, kat)) => {
+                    if let Some(m) = &marker
+                        && k.is(m)
+                    {
+                        return add_merge(&mut f.merges, &obj, kat);
+                    }
                     let before = dict.len();
                     if let Err(e) = dict.set_item(&k, &obj) {
                         // Comparing two equal deep keys can run out of interpreter stack; that
@@ -487,7 +563,8 @@ impl<'py, 's> Builder<'py, 's> {
                         }
                         return Err(e.into());
                     }
-                    if dict.len() == before {
+                    // A repeated key is an error in YAML 1.2; the compat modes keep the last.
+                    if dict.len() == before && !compat {
                         return Err(collision(dict, &k, kat));
                     }
                 }
@@ -507,6 +584,46 @@ impl<'py, 's> Builder<'py, 's> {
             })
         }
     }
+}
+
+/// Take the mapping (or list of mappings) a `<<` key names.
+fn add_merge<'py>(
+    merges: &mut Vec<Bound<'py, PyDict>>,
+    value: &Bound<'py, PyAny>,
+    at: usize,
+) -> R<()> {
+    let bad = || {
+        Fail::new(
+            "construct",
+            "expected a mapping or list of mappings for merging",
+            at,
+        )
+    };
+    let as_dict = |o: &Bound<'py, PyAny>| -> Option<Bound<'py, PyDict>> {
+        if let Ok(d) = o.cast::<PyDict>() {
+            return Some(d.clone());
+        }
+        // A mapping inside a key is a FrozenMapping, which wraps a dict.
+        o.getattr("_items").ok()?.cast_into::<PyDict>().ok()
+    };
+    if let Ok(list) = value.cast::<PyList>() {
+        let mut found = Vec::with_capacity(list.len());
+        for item in list.iter() {
+            found.push(as_dict(&item).ok_or_else(bad)?);
+        }
+        merges.extend(found.into_iter().rev());
+        return Ok(());
+    }
+    if let Ok(t) = value.cast::<PyTuple>() {
+        let mut found = Vec::with_capacity(t.len());
+        for item in t.iter() {
+            found.push(as_dict(&item).ok_or_else(bad)?);
+        }
+        merges.extend(found.into_iter().rev());
+        return Ok(());
+    }
+    merges.push(as_dict(value).ok_or_else(bad)?);
+    Ok(())
 }
 
 fn key_too_deep(at: usize) -> Fail {
@@ -580,7 +697,7 @@ fn spawn<'scope, 'env, T: Send + 'scope>(
 fn run_single<'py, 's>(
     py: Python<'py>,
     text: &'s str,
-    cap: usize,
+    cap: Conv,
     settings: &Settings,
     builder: &mut Builder<'py, 's>,
 ) -> R<()> {
@@ -606,7 +723,10 @@ fn run<'py, 's>(
     settings: &Settings,
     builder: &mut Builder<'py, 's>,
 ) -> R<()> {
-    let cap = lim.digits;
+    let cap = Conv {
+        cap: lim.digits,
+        mode: builder.mode,
+    };
     if text.len() < PIPELINE_MIN {
         // No batches: for a small input they would cost more than the work they hand over.
         return run_single(py, text, cap, settings, builder);
@@ -677,11 +797,12 @@ pub fn load<'py>(
     data: &Bound<'py, PyAny>,
     limits: &Bound<'py, PyAny>,
     multi: bool,
+    mode: Mode,
 ) -> PyResult<Bound<'py, PyAny>> {
     let lim = Lim::from_py(limits)?;
     with_text(py, data, lim.input, |text| {
         let settings = lim.settings();
-        let mut builder = Builder::new(py, lim, multi);
+        let mut builder = Builder::new(py, lim, multi, mode);
         if let Err(f) = run(py, text, lim, &settings, &mut builder) {
             return Err(to_pyerr(py, text, f, None));
         }

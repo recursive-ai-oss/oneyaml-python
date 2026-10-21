@@ -1,0 +1,982 @@
+{
+ "own/diagnostics/bom-in-a-block-scalar-is-an-error": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/diagnostics/bom-in-a-comment-is-an-error": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/diagnostics/bom-inside-a-plain-scalar-is-an-error": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/diagnostics/c1-control-in-a-comment-is-an-error": {
+  "backends": [
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/diagnostics/closing-quote-at-the-margin-of-a-nested-scalar": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/diagnostics/closing-single-quote-at-the-margin-of-a-sequence-entry": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/diagnostics/del-in-a-comment-is-an-error": {
+  "backends": [
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/diagnostics/empty-key-with-adjacent-flow-value-is-invalid": {
+  "backends": [
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/diagnostics/explicit-key-with-adjacent-flow-value-is-invalid": {
+  "backends": [
+   "pure"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/diagnostics/plain-key-with-adjacent-flow-value-is-invalid": {
+  "backends": [
+   "pure"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/diagnostics/second-bare-document-after-a-byte-order-mark-is-an-error": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/diagnostics/verbatim-tag-of-a-lone-bang-is-invalid": {
+  "backends": [
+   "pure"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/edit/add-to-bare-document-after-bom": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/edit/copy-from-an-alias-to-a-redefined-anchor-reads-the-latest": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/edit/keep-comment-after-value-spacing": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/edit/keep-stream-bom-before-second-document": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/edit/keep-tab-after-colon": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/edit/patch-copy-of-alias-past-anchor-is-bounded": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "alias expansion past the default limit is a limit error; PyYAML loads it (shared objects) and the expansion is only paid when the result is walked"
+ },
+ "own/edit/read-nonspecific-tag-is-string": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "the non-specific tag ! makes a plain scalar a string (YAML 1.2 section 6.9.1); PyYAML resolves it as if untagged"
+ },
+ "own/edit/remove-block-key-before-a-margin-colon": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/edit/remove-empty-key-of-flow-single-pair": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/bom-after-bare-document-before-directives-end": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/bom-line-after-bare-document-before-directives-end": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/bom-then-comment-after-bare-document": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a byte order mark ends a plain scalar and starts a comment here; PyYAML keeps it in the text"
+ },
+ "own/parse/bom-then-comment-after-document-end-marker": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/directive-lookalike-line-in-a-block-scalar-before-a-document": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/encoding-utf-8-with-bom": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/encoding-utf-8-without-bom": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/line-separator-is-not-a-line-break": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/margin-colon-after-a-block-scalar-key-belongs-to-the-outer-mapping": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/next-line-is-not-a-line-break": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/non-c0-characters-allowed-in-quoted-scalars": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/paragraph-separator-is-not-a-line-break": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/redefined-anchor-alias-is-the-latest-node": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/tab-before-a-document-marker-makes-it-text": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/tab-before-properties-whose-collection-starts-on-the-next-line": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/tab-only-line-after-block-scalar-at-end": {
+  "backends": [
+   "pure"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/top-level-literal-with-indentation-indicator": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "an indentation indicator on a top-level literal block counts from the document; PyYAML ignores it"
+ },
+ "own/roundtrip/explicit-and-complex-keys": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "own/roundtrip/line-separator-characters-in-content": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/roundtrip/tabs-as-separation": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/roundtrip/trailing-spaces-and-blank-lines": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/schema/anchor-can-be-redefined": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/schema/escaped-high-surrogate-before-hex-escape-is-refused": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/schema/escaped-high-surrogate-before-long-escape-is-refused": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/schema/escaped-high-surrogate-before-plain-character-is-refused": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/schema/escaped-lone-surrogate-is-refused": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/schema/escaped-mismatched-surrogates-are-refused": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/schema/escaped-surrogate-pair-is-one-character": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "an escaped surrogate pair is one character (YAML 1.2 section 5.7); PyYAML keeps the two halves as separate characters"
+ },
+ "own/schema/escaped-two-high-surrogates-are-refused": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "own/schema/mapping-as-a-mapping-key": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "own/schema/sequence-as-a-mapping-key": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/2JQS": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/2SXE": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/3GZX": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/4FJ6": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/4MUZ/00": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/4MUZ/01": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/4MUZ/02": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/58MP": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/5MUD": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/5T43": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/652Z": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "in a flow mapping, ?foo is a plain scalar (YAML 1.2 section 7.3.3); PyYAML reads ? as an explicit-key marker"
+ },
+ "yts/6BCT": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/6BFJ": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/6CA3": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/6HB6": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/6M2F": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/6PBE": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/7Z25": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/8XYN": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/9C9N": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/9JBA": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/9MMW": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/9SA2": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/A2M4": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/CFD4": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/CVW2": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/DBG4": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/DC7X": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/DK3J": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/DK95/00": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/DK95/01": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/DK95/03": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/DK95/04": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/DK95/05": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/DK95/07": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/EB22": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/FP8R": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/FRK4": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/G5U8": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/HM87/00": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/HM87/01": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "in a flow sequence, ?x is a plain scalar (YAML 1.2 section 7.3.3); PyYAML reads ? as an explicit-key marker"
+ },
+ "yts/HS5T": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/HWV9": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/J3BT": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/JEF9/02": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a keep-chomped block scalar of only line breaks keeps them; PyYAML drops them"
+ },
+ "yts/JR7V": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/K3WX": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/K54U": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/KK5P": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/L24T/01": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a block scalar keeps a last line that holds only spaces; PyYAML drops its line break"
+ },
+ "yts/LX3P": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/M2N8/00": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/M2N8/01": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/M5DY": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/M7A3": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/MUS6/01": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/MUS6/03": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/NB6Z": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/NHX8": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/NJ66": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/NKF9": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/PW8X": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/Q5MG": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/Q9WF": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/QB6E": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/QT73": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/RHX7": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/RZP5": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/S3PD": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/S4JQ": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "the non-specific tag ! makes a plain scalar a string (YAML 1.2 section 6.9.1); PyYAML resolves it as if untagged"
+ },
+ "yts/S98Z": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/SBG9": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/SM9W/01": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/SU5Z": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ },
+ "yts/UKK6/00": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/UKK6/02": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "the non-specific tag ! on an empty node is an empty string (YAML 1.2 section 6.9.1); PyYAML reads null"
+ },
+ "yts/UT92": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/UV7Q": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/V9D5": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/VJP3/01": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/W4TN": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/W5VH": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/WZ62": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/X38W": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/XW4D": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a collection as a mapping key: PyYAML refuses it as unhashable; this library reads it as a tuple or read-only mapping"
+ },
+ "yts/Y2GN": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "an anchor name may contain a colon (YAML 1.2 section 6.9.2); PyYAML ends the name there"
+ },
+ "yts/Y79Y/002": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/Y79Y/010": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "yts/YJV2": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML accepts input that YAML 1.2 forbids"
+ }
+}
