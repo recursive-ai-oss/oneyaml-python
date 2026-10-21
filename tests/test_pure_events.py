@@ -245,6 +245,13 @@ BAD = [
     ("[a: b: c]\n", "syntax", None, None),
     ("a: 1\n!\n", "syntax", None, None),
     ("ke: &x\n!!map\n ? a: b{\n", "syntax", None, None),
+    # Properties alone on an earlier line start a new mapping, so they cannot sit before a key
+    # of the mapping that is already open; the error is at the end of that first line.
+    ("a: 1\n!!map\n!!str b: c\n", "syntax", 2, 6),
+    ("a: 1\n!!map\nb: 2\n", "syntax", 2, 6),
+    # DEL and the C1 controls (but not U+0085) are not printable, comments included.
+    ("# c\x7f\na: 1\n", "syntax", 1, 4),
+    ("# c\x9f\na: 1\n", "syntax", 1, 4),
 ]
 
 

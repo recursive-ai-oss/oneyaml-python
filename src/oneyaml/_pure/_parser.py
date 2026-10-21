@@ -968,6 +968,7 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
                 oa: str | None = None
                 ot: str | None = None
                 props_nl = False
+                first_end = -1
                 cnl = nl
                 ctab = tab
                 sep_tab = not nl and "\t" in s[i:j]
@@ -1020,6 +1021,7 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
                                 if oa is not None or ot is not None:
                                     raise fail(j, "too many property lines")
                                 oa, ot = anchor, tag
+                                first_end = pend
                                 anchor = tag = None
                                 gstart = j
                                 gcol = col
@@ -1041,7 +1043,10 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
                         two = False
                     cnl = cnl or props_nl
                     if mk and props_nl and not alone:
-                        raise fail(j, "the properties of a mapping key are on its line")
+                        raise fail(
+                            first_end if first_end >= 0 else pend,
+                            "the properties of a mapping key are on its line",
+                        )
                     if alone:
                         if mk:
                             raise fail(pend, "a mapping key needs a colon")
@@ -1264,6 +1269,10 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
                     if ctab or sep_tab:
                         raise fail(k + 1, "a tab cannot indent a block collection")
                     if mk:
+                        if two:
+                            # Properties alone on an earlier line would belong to a new mapping,
+                            # and this key continues the open one.
+                            raise fail(first_end, "the properties of a mapping key are on its line")
                         if props_nl or not (kinds and kinds[-1] == 1 and inds[-1] == kcol):
                             raise fail(j, "unexpected indentation")
                     else:
