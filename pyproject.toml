@@ -5,19 +5,41 @@ build-backend = "maturin"
 [project]
 name = "oneyaml"
 version = "0.1.0.dev0"
-description = "A YAML 1.2 library with a native and a pure-Python backend"
+description = "json-style YAML 1.2 and comment-preserving editing for Python, in one package"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
 license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 requires-python = ">=3.10"
 # No runtime dependencies: the native module is bundled in the wheel.
 dependencies = []
+keywords = ["yaml", "yaml-1.2", "parser", "round-trip", "comments", "json-patch", "merge-patch", "config", "pyyaml", "ruamel"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Free Threading :: 2 - Beta",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
     "Programming Language :: Rust",
+    "Topic :: File Formats",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Markup",
     "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/recursive-ai-oss/oneyaml-python"
+Repository = "https://github.com/recursive-ai-oss/oneyaml-python"
+Documentation = "https://github.com/recursive-ai-oss/oneyaml-python/blob/main/docs/guide.md"
+Issues = "https://github.com/recursive-ai-oss/oneyaml-python/issues"
+Changelog = "https://github.com/recursive-ai-oss/oneyaml-python/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
@@ -45,6 +67,8 @@ addopts = "-ra"
 line-length = 100
 target-version = "py310"
 src = ["src", "tests", "tools"]
+# Code samples in the docs are laid out for readers; tests run them, ruff leaves them alone.
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
