@@ -485,6 +485,8 @@ def _fixable(value):
         if isinstance(v, Tagged):
             if not isinstance(v.value, (str, list, dict)):
                 return False
+            if "%" in v.tag:  # a read keeps "%25" escaped, so a literal "%" comes back as "%25"
+                return False
             if isinstance(v.value, str) and v.tag == "tag:yaml.org,2002:str":
                 return False
             work.append(v.value)

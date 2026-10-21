@@ -49,51 +49,13 @@ def pytest_collection_modifyitems(items):
 
 # ---- the native engine's known deviations ------------------------------------------------------
 # Inputs on which the native backend differs from the expected answer because the parsing engine
-# does (error positions it reports at the start of a construct, a few inputs it accepts). Each
-# entry names the kit case that lists the same engine deviation. The marks are strict: when a
-# newer engine fixes one, the test passes, the run fails, and the entry is deleted here.
-# Nothing goes on this list without a kit case.
+# does. Each entry says why. The marks are strict: when a newer engine fixes one, the test
+# passes, the run fails, and the entry is deleted here.
 NATIVE_ENGINE_DEVIATIONS = {
-    # (test, input): kit case
-    ("test_errors", 'a: "abc\n'): "own:diagnostics/unclosed-double-quote",
-    ("test_errors", "a: 'abc"): "own:diagnostics/unclosed-single-quote-without-final-newline",
-    ("test_errors", "a: b: c\n"): "own:diagnostics/second-colon-in-a-plain-scalar-value",
-    ("test_errors", "a: b\n c: d\n"): "own:diagnostics/position-implicit-key-over-two-lines",
-    ("test_errors", "a: b\r\n c: d\r\n"): "own:diagnostics/position-counts-crlf-as-one-line-break",
-    ("test_errors", "a: b\r c: d\r"): "own:diagnostics/position-counts-a-bare-cr-as-a-line-break",
-    ("test_errors", "a: 1\nb\nc: 2\n"): "own:diagnostics/mapping-key-without-a-colon",
-    ("test_errors", "a: 1\n- b\n"): "own:diagnostics/sequence-entry-after-a-block-mapping",
-    ("test_errors", 'a: "x\\qy"\n'): "own:diagnostics/invalid-escape-in-double-quotes",
-    ("test_errors", 'a: "\\xZZ"\n'): "own:diagnostics/hex-escape-with-a-non-hex-digit",
-    ("test_errors", 'a: "\\u12"\n'): "own:diagnostics/short-unicode-escape",
-    ("test_errors", "a: |0\n x\n"): "own:diagnostics/zero-block-scalar-indentation-indicator",
-    ("test_errors", "&a[b]\n"): "own:diagnostics/anchor-directly-before-flow-collection",
-    ("test_errors", "{a:{}}\n"): "own:diagnostics/plain-key-with-adjacent-flow-value-is-invalid",
-    ("test_errors", "{:{0}}\n"): "own:diagnostics/empty-key-with-adjacent-flow-value-is-invalid",
-    ("test_errors", "!a%2 x\n"): "own:diagnostics/tag-percent-escape-with-one-hex-digit",
-    ("test_errors", "- !<!> foo\n"): "own:diagnostics/verbatim-tag-of-a-lone-bang-is-invalid",
-    ("test_errors", "a: &x &y b\n"): "own:diagnostics/second-anchor-on-one-node-is-an-error",
-    (
-        "test_errors",
-        "%YAML 1.2\n%YAML 1.2\n---\n",
-    ): "own:diagnostics/second-yaml-directive-is-an-error",
-    ("test_errors", "'a''b"): "own:diagnostics/unclosed-single-quote-after-escaped-quote",
-    # The engine reports these at the start of the construct, not at the line break after the
-    # properties.
-    ("test_errors", "a: 1\n!!map\n!!str b: c\n"): (
-        "own:diagnostics/properties-on-their-own-line-before-a-key-of-an-open-mapping"
-    ),
-    ("test_errors", "a: 1\n!!map\nb: 2\n"): (
-        "own:diagnostics/properties-on-their-own-line-before-a-key-of-an-open-mapping"
-    ),
-    # The engine accepts DEL and C1 controls in comments.
-    ("test_errors", "# c\x7f\na: 1\n"): "own:diagnostics/del-in-a-comment-is-an-error",
-    ("test_errors", "# c\x9f\na: 1\n"): "own:diagnostics/c1-control-in-a-comment-is-an-error",
-    ("test_syntax_errors_have_one_based_positions", "a: 1\n- b\n"): (
-        "own:diagnostics/sequence-entry-after-a-block-mapping"
-    ),
+    # (test, input): why
     # The engine reads a float key past the range of a double as infinity (or zero), so such
-    # keys are duplicates of each other; the kit allows a limit error and forbids the duplicate.
+    # keys are duplicates of each other; the kit allows a limit error and forbids the duplicate
+    # (its cases for this are patches, which match keys by text and pass; none loads the keys).
     ("test_float_keys_outside_a_double_are_a_limit", "1e400: a\n.inf: b\n"): (
         "own:schema/finite-float-key-and-infinity-are-not-duplicates"
     ),
@@ -103,28 +65,14 @@ NATIVE_ENGINE_DEVIATIONS = {
     ("test_float_keys_outside_a_double_are_a_limit", "1e-400: a\n2e-400: b\n"): (
         "own:schema/keys-of-underflowing-floats-with-different-values-are-not-duplicates"
     ),
-    ("test_events", '"\\ud83d\\ude00 \\x41 \\U0001F600 \\N\\_"\n'): (
-        "own:schema/escaped-surrogate-pair-is-one-character"
-    ),
-    # One test over several inputs. The engine accounts for these of them: `- a` / ` -b: c`
-    # (position-implicit-key-over-two-lines), `a: "\x4"` (hex-escape-with-a-non-hex-digit),
-    # `? a` / `? b` / `c` (mapping-key-without-a-colon) and the escaped surrogate pair above.
-    ("test_backends_agree_on_hard_input", None): (
-        "own:diagnostics/position-implicit-key-over-two-lines, "
-        "own:diagnostics/hex-escape-with-a-non-hex-digit, "
-        "own:diagnostics/mapping-key-without-a-colon, "
-        "own:schema/escaped-surrogate-pair-is-one-character"
-    ),
+    # One test over several inputs. `? a` / `? b` / `c`: the engine stops before the empty value
+    # of the last key, the pure parser reports it first (the error is the same).
+    ("test_backends_agree_on_hard_input", None): "own:diagnostics/mapping-key-without-a-colon",
 }
 
 
 # Document tests on which the native engine differs (the pure backend passes them).
-NATIVE_DOCUMENT_DEVIATIONS = {
-    "test_a_string_added_next_to_double_quoted_values_is_double_quoted": (
-        "the engine's insert does not copy the siblings' quoting yet: "
-        "own:edit/add-key-double-quoted-siblings"
-    ),
-}
+NATIVE_DOCUMENT_DEVIATIONS = {}
 
 _DEVIATION_MODULES = ("test_pure_events", "test_load", "test_load_edges")
 

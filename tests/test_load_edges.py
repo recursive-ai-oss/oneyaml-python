@@ -531,3 +531,18 @@ def test_the_first_error_in_the_text_wins_over_a_later_one(api):
     fails(api, "a: 1\nb: 2\na: 3\n- x\n", "duplicate-key")
     fails(api, nine_by_nine() + "x: [\n", "limit")
     assert fails(api, "x: [\n", "syntax").line is not None
+
+
+@pytest.mark.parametrize(
+    ("text", "tag"),
+    [
+        ("!a%20b x\n", "!a b"),
+        ("!a%25b x\n", "!a%25b"),
+        ("!a%2541 x\n", "!a%2541"),
+        ("!a%C3%A9 x\n", "!a%C3%A9"),
+        ("!<tag:x,2000:a%25b> x\n", "tag:x,2000:a%25b"),
+    ],
+)
+def test_tags_keep_percent_and_non_ascii_escapes_as_written(api, text, tag):
+    # Tags that differ only in such an escape stay different tags.
+    assert api.loads(text).tag == tag
