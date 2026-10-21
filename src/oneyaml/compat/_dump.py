@@ -36,6 +36,9 @@ TAG_MAP = _YAML + "map"
 
 # How deep representers that call ``represent_data`` from inside a representer may nest.
 MAX_CALLBACK_DEPTH = 100
+# How deep collections may nest in a dump (the limit of the primary ``dumps``): the text grows
+# with the square of the depth, so an unbounded value could use all the memory.
+MAX_DEPTH = 10_000
 
 
 def _error(name: str, message: str, *args: Any, category: str = "other") -> Exception:
@@ -102,11 +105,10 @@ class BaseRepresenter:
         return ScalarNode(None, str(data))
 
     def _inline_ok(self) -> bool:
-        cls = type(self)
         return (
-            cls.represent_sequence is BaseRepresenter.represent_sequence
-            and cls.represent_mapping is BaseRepresenter.represent_mapping
-            and cls.represent_scalar is BaseRepresenter.represent_scalar
+            _is(self, "represent_sequence", BaseRepresenter.represent_sequence)
+            and _is(self, "represent_mapping", BaseRepresenter.represent_mapping)
+            and _is(self, "represent_scalar", BaseRepresenter.represent_scalar)
         )
 
     def _represent(self, root):  # noqa: C901
@@ -134,7 +136,8 @@ class BaseRepresenter:
                     kind, tag = spec
                     if kind == _SEQ:
                         node = SequenceNode(tag, [], flow_style=None)
-                        flat = data
+                        # A copy: a list that shrinks while it is written ends the walk of it.
+                        flat = data if type(data) is tuple else list(data)
                     elif kind == _MAP:
                         node = MappingNode(tag, [], flow_style=None)
                         flat = self._flat_items(list(data.items()))
@@ -149,6 +152,12 @@ class BaseRepresenter:
             while True:
                 if frame is not None:
                     if len(frame[2]) > 0:
+                        if len(stack) >= MAX_DEPTH:
+                            raise _error(
+                                "RepresenterError",
+                                f"the value nests deeper than {MAX_DEPTH} levels",
+                                category="limit",
+                            )
                         stack.append(frame)
                         data = frame[2][0]
                         break
@@ -458,6 +467,15 @@ _PLAIN_REPRESENTERS = tuple(
 _STANDARD_IMPLICIT = {k: list(v) for k, v in Resolver.yaml_implicit_resolvers.items()}
 
 
+# Columns the native writer counts in; a wider setting is read by the Python writer.
+_MAX_COLUMN = 1 << 40
+
+
+def _is(obj, name, func) -> bool:
+    """Whether ``obj.name`` is ``func`` itself: not overridden by a subclass or the instance."""
+    return getattr(getattr(obj, name, None), "__func__", None) is func
+
+
 def _backend_body():
     """The active backend's writer for plain data, or None (the pure backend has none)."""
     return getattr(_api._impl, "pyyaml_body", None)
@@ -714,27 +732,36 @@ class _DumperCore:
 
     def _fast_ok(self) -> bool:
         """Whether the backend can write this dumper's documents: plain data, block style, the
-        standard tables, nothing replaced."""
-        cls = type(self)
+        standard tables, nothing replaced. Everything is read from the instance, as the Python
+        writer reads it, so an override set in ``__init__`` counts."""
         flow = self.default_flow_style
+        w = self._writer
         return (
             self.closed is False
             and self.default_style is None
             and flow is not None
             and not flow
-            and not self._writer.canonical
+            and not w.canonical
             and not self.use_version
             and not self.use_tags
-            and cls.represent_data is BaseRepresenter.represent_data
-            and cls.serialize is Serializer.serialize
-            and cls.increase_indent is Emitter.increase_indent
-            and cls.ignore_aliases is SafeRepresenter.ignore_aliases
-            and cls.resolve is BaseResolver.resolve
-            and not cls.yaml_path_resolvers
-            and cls.yaml_implicit_resolvers == _STANDARD_IMPLICIT
-            and cls.DEFAULT_SCALAR_TAG == TAG_STR
+            # Only whole numbers in range: a float width ("never fold") or a huge one is the
+            # Python writer's business.
+            and type(w.best_indent) is int
+            and type(w.best_width) is int
+            and 0 < w.best_indent < _MAX_COLUMN
+            and 0 < w.best_width < _MAX_COLUMN
+            and _is(self, "represent_data", BaseRepresenter.represent_data)
+            and _is(self, "serialize", Serializer.serialize)
+            and _is(self, "increase_indent", Emitter.increase_indent)
+            and _is(self, "ignore_aliases", SafeRepresenter.ignore_aliases)
+            and _is(self, "resolve", BaseResolver.resolve)
+            and not self.yaml_path_resolvers
+            and self.yaml_implicit_resolvers == _STANDARD_IMPLICIT
+            and self.DEFAULT_SCALAR_TAG == TAG_STR
+            and self.DEFAULT_SEQUENCE_TAG == TAG_SEQ
+            and self.DEFAULT_MAPPING_TAG == TAG_MAP
             and self._inline_ok()
-            and all(cls.yaml_representers.get(t) is f for t, f in _PLAIN_REPRESENTERS)
+            and all(self.yaml_representers.get(t) is f for t, f in _PLAIN_REPRESENTERS)
         )
 
 

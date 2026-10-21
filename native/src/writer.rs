@@ -707,7 +707,7 @@ fn push_u64(out: &mut String, mut n: u64) {
     out.push_str(std::str::from_utf8(&buf[i..]).unwrap_or("0"));
 }
 
-pub(crate) fn push_int(out: &mut String, v: &Bound<'_, PyAny>) -> PyResult<()> {
+fn push_int(out: &mut String, v: &Bound<'_, PyAny>) -> PyResult<()> {
     reserve(out, 25)?;
     if let Ok(n) = v.extract::<i64>() {
         if n < 0 {

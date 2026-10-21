@@ -694,3 +694,248 @@ def test_numbers_of_any_size_are_written(api):
     assert cy.safe_dump(big) == yaml.safe_dump(big)
     with pytest.raises(ValueError):  # the interpreter's own limit on digits, as for PyYAML
         cy.safe_dump(10**5000)
+
+
+# ---- settings the native writer does not take --------------------------------------------------
+
+_FOLDED = {"a": "x y " * 40, "b": [1, 2], "c": "é " * 50}
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"width": float("inf")},
+        {"width": 1e9},
+        {"width": 2**70},
+        {"width": 10**9},
+        {"width": -5},
+        {"width": 0},
+        {"indent": 4.5},
+        {"indent": 4.0},
+        {"indent": 2**70},
+        {"indent": 3, "width": 30.5},
+    ],
+    ids=repr,
+)
+def test_widths_and_indents_that_are_not_small_ints_follow_pyyaml(api, kw):
+    ours = outcome(cy, "SafeDumper", _FOLDED, kw)
+    assert ours == outcome(yaml, "SafeDumper", _FOLDED, kw)
+    if ours[0] == "ok":
+        assert yaml.safe_load(ours[1]) == _FOLDED
+
+
+# ---- tables read from the instance -------------------------------------------------------------
+
+
+def _both(base_cy, base_yaml, setup):
+    """One dumper class per library with the same change; ``setup`` gets the class."""
+    return setup(type("D", (base_cy,), {})), setup(type("D", (base_yaml,), {}))
+
+
+def _set_tags(cls):
+    cls.DEFAULT_MAPPING_TAG = "tag:example.com,2000:m"
+    cls.DEFAULT_SEQUENCE_TAG = "tag:example.com,2000:s"
+    return cls
+
+
+def _set_tags_in_init(cls):
+    original = cls.__init__
+
+    def __init__(self, *args, **kw):
+        original(self, *args, **kw)
+        self.DEFAULT_MAPPING_TAG = "tag:example.com,2000:m"
+        self.DEFAULT_SEQUENCE_TAG = "tag:example.com,2000:s"
+
+    cls.__init__ = __init__
+    return cls
+
+
+def _no_resolvers_in_init(cls):
+    original = cls.__init__
+
+    def __init__(self, *args, **kw):
+        original(self, *args, **kw)
+        self.yaml_implicit_resolvers = {}
+
+    cls.__init__ = __init__
+    return cls
+
+
+@pytest.mark.parametrize(
+    "setup", [_set_tags, _set_tags_in_init, _no_resolvers_in_init], ids=lambda f: f.__name__
+)
+def test_a_dumper_that_changes_its_tags_or_resolvers_is_obeyed(api, setup):
+    ours, ref = _both(cy.SafeDumper, yaml.SafeDumper, setup)
+    value = {"a": [1, "2", "yes"], "b": {"c": None}, "d": "text"}
+    expected = yaml.dump(value, Dumper=ref)
+    assert cy.dump(value, Dumper=ours) == expected
+    if setup is not _no_resolvers_in_init:
+        assert "!!map" in expected
+
+
+def test_a_dumper_that_replaces_a_method_on_the_instance_is_obeyed(api):
+    seen = []
+
+    class Spy(cy.SafeDumper):
+        def __init__(self, *args, **kw):
+            super().__init__(*args, **kw)
+            original = self.represent_data
+            self.represent_data = lambda data: seen.append(data) or original(data)
+
+    assert cy.dump({"a": [1]}, Dumper=Spy) == "a:\n- 1\n"
+    assert seen  # the replacement ran; the native writer would not have called it
+
+
+# ---- the depth limit ---------------------------------------------------------------------------
+
+
+def _nested(kind, levels):
+    value = "x"
+    for _ in range(levels):
+        value = {"n": value} if kind == "dict" else [value]
+    return value
+
+
+@pytest.mark.parametrize("kind", ["dict", "list"])
+def test_values_nested_past_the_limit_of_dumps_are_refused(api, kind):
+    import oneyaml
+    from oneyaml._pure._emit import MAX_DEPTH
+
+    for levels in (MAX_DEPTH + 1, 45_000):
+        with pytest.raises(cy.RepresenterError) as info:
+            cy.safe_dump(_nested(kind, levels))
+        assert info.value.category == "limit"
+    with pytest.raises(oneyaml.LimitError):  # the same limit as the primary dumps
+        oneyaml.dumps(_nested(kind, MAX_DEPTH + 1))
+
+
+def test_values_at_the_limit_are_written(api):
+    from oneyaml._pure._emit import MAX_DEPTH
+
+    text = cy.safe_dump(_nested("list", MAX_DEPTH))
+    assert text.count("- ") == MAX_DEPTH
+
+
+# ---- lists and dicts that change while they are written ----------------------------------------
+
+
+def test_a_list_that_shrinks_while_it_is_written_ends_there(api):
+    items = list(range(6))
+
+    class Shrinker:
+        pass
+
+    def shrink(dumper, data):
+        del items[2:]
+        return dumper.represent_scalar("!shrunk", "x")
+
+    class D(cy.SafeDumper):
+        pass
+
+    D.add_representer(Shrinker, shrink)
+    items[1] = Shrinker()
+    # Never an IndexError: the list is read as it was when its walk began, on both routes.
+    text = cy.dump(items, Dumper=D)
+    assert text.startswith("- 0\n- !shrunk 'x'\n")
+
+
+def test_signals_that_change_values_during_a_dump_give_text_or_runtime_error(api):
+    import signal
+
+    if not hasattr(signal, "setitimer"):
+        pytest.skip("no interval timers")
+    big_list = [{"k": "v " * 20, "n": i} for i in range(60_000)]
+    big_dict = {f"key{i:06d}": [i, "w " * 20] for i in range(60_000)}
+    value = {"l": big_list, "d": big_dict}
+
+    def change(*_):
+        del big_list[len(big_list) // 2 :]
+        big_dict.pop("key000005", None)
+        big_dict["extra"] = 1
+
+    old = signal.signal(signal.SIGALRM, change)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, 0.0005)
+        try:
+            text = cy.safe_dump(value)
+        except RuntimeError:
+            text = None
+        if text is not None:
+            assert isinstance(yaml.safe_load(text), dict)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, old)
+
+
+def test_threads_that_change_values_during_a_dump_give_text_or_runtime_error(api):
+    import threading
+
+    shared_list = [{f"k{i}": ["v" * 20, i, 1.5, None]} for i in range(300)]
+    shared_dict = {f"k{i:04d}": ["x y " * 5, {"z": i}] for i in range(300)}
+    value = {"l": shared_list, "d": shared_dict}
+    stop = threading.Event()
+
+    def mutate():
+        n = 0
+        while not stop.is_set():
+            n += 1
+            try:
+                if n % 3 == 0 and shared_list:
+                    shared_list.pop(n % len(shared_list))
+                elif n % 3 == 1:
+                    shared_list.insert(n % (len(shared_list) + 1), {"n": [n]})
+                else:
+                    shared_dict[f"k{n % 500:04d}"] = [n]
+                    shared_dict.pop(f"k{(n * 7) % 500:04d}", None)
+            except (IndexError, KeyError):
+                pass
+
+    threads = [threading.Thread(target=mutate) for _ in range(2)]
+    for t in threads:
+        t.start()
+    try:
+        for _ in range(60):
+            try:
+                text = cy.safe_dump(value)
+            except RuntimeError:
+                continue
+            assert isinstance(yaml.safe_load(text), dict)
+    finally:
+        stop.set()
+        for t in threads:
+            t.join()
+
+
+# ---- out of memory -----------------------------------------------------------------------------
+
+_ALLOC_PROBE = """
+import resource
+from oneyaml.compat import pyyaml as cy
+text = ("\\t" + "a" * 9) * 10_000_000
+def vmsize():
+    for line in open("/proc/self/status"):
+        if line.startswith("VmSize"):
+            return int(line.split()[1]) * 1024
+limit = vmsize() + 260 * 2**20
+resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+try:
+    out = cy.safe_dump([text])
+    print("text", len(out))
+except MemoryError:
+    print("MemoryError")
+"""
+
+
+def test_running_out_of_memory_is_a_memory_error_not_an_abort(api):
+    import os
+    import subprocess
+    import sys
+
+    if not sys.platform.startswith("linux"):
+        pytest.skip("needs /proc and RLIMIT_AS")
+    env = {**os.environ, "ONEYAML_BACKEND": api.name}
+    done = subprocess.run(
+        [sys.executable, "-c", _ALLOC_PROBE], capture_output=True, text=True, env=env, timeout=120
+    )
+    assert done.returncode == 0, done.stderr[-300:]
+    assert done.stdout.split()[0] in ("text", "MemoryError")

@@ -12,6 +12,7 @@
 
 use std::collections::HashSet;
 
+use pyo3::exceptions::PyMemoryError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString};
 
@@ -20,6 +21,10 @@ use crate::writer::{poll_signals, push_float, reserve};
 
 /// Output bytes between looks for a pending signal.
 const SIGNAL_BYTES: usize = 1 << 15;
+/// Nesting of collections that is written: the limit of the primary `dumps`. A deeper value
+/// goes to the general writer, which refuses it with the module's own error.
+const MAX_DEPTH: usize = 10_000;
+const SPACES: &str = "                                                                ";
 /// A key (its text and its tag) must be shorter than this to be written without `? `.
 const KEY_LIMIT: usize = 128;
 
@@ -288,6 +293,27 @@ fn clen(s: &str) -> usize {
     }
 }
 
+fn no_memory() -> Stop {
+    Stop::Py(PyMemoryError::new_err("out of memory while writing"))
+}
+
+/// A vector with room for `n` items, or a `MemoryError` (never an abort).
+fn vec_with_capacity<T>(n: usize) -> R<Vec<T>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(n).map_err(|_| no_memory())?;
+    Ok(v)
+}
+
+/// Opens a collection's frame; a value nested past the limit is left to the general writer.
+fn open_frame<'py>(stack: &mut Vec<Frame<'py>>, frame: Frame<'py>) -> R<()> {
+    if stack.len() >= MAX_DEPTH {
+        return Err(Stop::Bail);
+    }
+    stack.try_reserve(1).map_err(|_| no_memory())?;
+    stack.push(frame);
+    Ok(())
+}
+
 // ---- the writer --------------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq)]
@@ -432,9 +458,12 @@ impl<'py> Body<'py> {
         if self.column < indent {
             self.whitespace = true;
             let n = indent - self.column;
-            reserve(&mut self.s, n)?;
-            for _ in 0..n {
-                self.s.push(' ');
+            // In chunks of a constant string, not a character at a time.
+            let mut left = n;
+            while left > 0 {
+                let k = left.min(SPACES.len());
+                self.push(&SPACES[..k])?;
+                left -= k;
             }
             self.column = indent;
         }
@@ -492,23 +521,32 @@ impl<'py> Body<'py> {
                 || self.column + clen(text) + quotes <= self.best_width)
         {
             if quotes > 0 {
-                let doubled = text.replace('\'', "''");
-                self.push(&doubled)?;
-                self.column += clen(&doubled);
+                // Doubled quotes, written piece by piece: no copy of the text.
+                let mut first = true;
+                for piece in text.split('\'') {
+                    if !first {
+                        self.push("''")?;
+                    }
+                    first = false;
+                    self.push(piece)?;
+                }
+                self.column += clen(text) + quotes;
             } else {
                 self.push(text)?;
                 self.column += clen(text);
             }
             return self.indicator("'", false, false, false);
         }
-        let chars: Vec<char> = text.chars().collect();
-        let length = chars.len();
+        // `start` and `end` are byte offsets; PyYAML's are character offsets, and the columns
+        // are counted in characters.
+        let length = text.len();
         let (mut spaces, mut breaks) = (false, false);
         let (mut start, mut end) = (0usize, 0usize);
-        while end <= length {
-            let ch = chars.get(end).copied();
+        loop {
+            let ch = text[end..].chars().next();
             if spaces {
                 if ch != Some(' ') {
+                    // Spaces are one byte each, so one byte is one space.
                     if start + 1 == end
                         && self.column > self.best_width
                         && split
@@ -517,18 +555,17 @@ impl<'py> Body<'py> {
                     {
                         self.write_indent()?;
                     } else {
-                        let data: String = chars[start..end].iter().collect();
                         self.column += end - start;
-                        self.push(&data)?;
+                        self.push(&text[start..end])?;
                     }
                     start = end;
                 }
             } else if breaks {
                 if ch.is_none_or(|c| !is_break(c)) {
-                    if chars[start] == '\n' {
+                    if text[start..].starts_with('\n') {
                         self.line_break()?;
                     }
-                    for &br in &chars[start..end] {
+                    for br in text[start..end].chars() {
                         if br == '\n' {
                             self.line_break()?;
                         } else {
@@ -539,9 +576,8 @@ impl<'py> Body<'py> {
                     start = end;
                 }
             } else if ch.is_none_or(|c| c == ' ' || is_break(c) || c == '\'') && start < end {
-                let data: String = chars[start..end].iter().collect();
-                self.column += end - start;
-                self.push(&data)?;
+                self.column += clen(&text[start..end]);
+                self.push(&text[start..end])?;
                 start = end;
             }
             if ch == Some('\'') {
@@ -549,11 +585,12 @@ impl<'py> Body<'py> {
                 self.push("''")?;
                 start = end + 1;
             }
-            if let Some(c) = ch {
-                spaces = c == ' ';
-                breaks = is_break(c);
-            }
-            end += 1;
+            let Some(c) = ch else {
+                break;
+            };
+            spaces = c == ' ';
+            breaks = is_break(c);
+            end += c.len_utf8();
         }
         self.indicator("'", false, false, false)
     }
@@ -588,59 +625,108 @@ impl<'py> Body<'py> {
             self.column += n;
             return self.indicator("\"", false, false, false);
         }
-        let chars: Vec<char> = text.chars().collect();
-        let length = chars.len();
+        // Byte offsets again (see `write_single`); a column is a number of characters.
+        let length = text.len();
         let (mut start, mut end) = (0usize, 0usize);
         let mut marker = false;
-        while end <= length {
-            let ch = chars.get(end).copied();
+        loop {
+            let ch = text[end..].chars().next();
             let needs = ch.is_none_or(needs_escape);
             if needs {
                 if start < end {
-                    let data: String = chars[start..end].iter().collect();
-                    self.column += end - start;
-                    self.push(&data)?;
+                    self.column += clen(&text[start..end]);
+                    self.push(&text[start..end])?;
                     start = end;
                     marker = false;
                 }
                 if let Some(c) = ch {
                     marker = false;
-                    let data = escape(c);
-                    self.column += data.len();
-                    self.push(&data)?;
-                    start = end + 1;
+                    let n = self.push_escape(c)?;
+                    self.column += n;
+                    start = end + c.len_utf8();
                 }
             }
+            // Characters from `start` to `end`; one less than none when an escape ended at `end`.
+            let pending: i64 = match start.cmp(&end) {
+                std::cmp::Ordering::Less => clen(&text[start..end]) as i64,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => -1,
+            };
+            let more_than_one_left = ch.is_some_and(|c| end + c.len_utf8() < length);
             if 0 < end
-                && end + 1 < length
+                && more_than_one_left
                 && (ch == Some(' ') || start >= end)
-                && self.column as i64 + (end as i64 - start as i64) > self.best_width as i64
+                && self.column as i64 + pending > self.best_width as i64
                 && split
                 && !(marker && start >= end)
             {
-                let mut data: String = if start < end {
-                    chars[start..end].iter().collect()
-                } else {
-                    String::new()
-                };
-                data.push('\\');
                 if start < end {
+                    self.column += clen(&text[start..end]);
+                    self.push(&text[start..end])?;
                     start = end;
                 }
-                self.column += clen(&data);
-                self.push(&data)?;
+                self.column += 1;
+                self.push("\\")?;
                 self.write_indent()?;
                 self.whitespace = false;
                 self.indention = false;
-                marker = chars[start] == ' ';
+                marker = text[start..].starts_with(' ');
                 if marker {
                     self.column += 1;
                     self.push("\\")?;
                 }
             }
-            end += 1;
+            let Some(c) = ch else {
+                break;
+            };
+            end += c.len_utf8();
         }
         self.indicator("\"", false, false, false)
+    }
+
+    /// The escape of `c` (`\n`, `\x1B`, `\u2028`, ...) appended to the output; returns its
+    /// length in characters.
+    fn push_escape(&mut self, c: char) -> R<usize> {
+        let named: Option<&str> = match c {
+            '\0' => Some("\\0"),
+            '\u{7}' => Some("\\a"),
+            '\u{8}' => Some("\\b"),
+            '\t' => Some("\\t"),
+            '\n' => Some("\\n"),
+            '\u{b}' => Some("\\v"),
+            '\u{c}' => Some("\\f"),
+            '\r' => Some("\\r"),
+            '\u{1b}' => Some("\\e"),
+            '"' => Some("\\\""),
+            '\\' => Some("\\\\"),
+            '\u{85}' => Some("\\N"),
+            '\u{a0}' => Some("\\_"),
+            '\u{2028}' => Some("\\L"),
+            '\u{2029}' => Some("\\P"),
+            _ => None,
+        };
+        if let Some(t) = named {
+            self.push(t)?;
+            return Ok(t.len());
+        }
+        let u = c as u32;
+        let (marker, digits) = if u <= 0xff {
+            (b'x', 2)
+        } else if u <= 0xffff {
+            (b'u', 4)
+        } else {
+            (b'U', 8)
+        };
+        let mut buf = [b'\\'; 10];
+        buf[1] = marker;
+        for i in 0..digits {
+            let nibble = ((u >> (4 * (digits - 1 - i))) & 0xf) as usize;
+            buf[2 + i] = b"0123456789ABCDEF"[nibble];
+        }
+        let len = 2 + digits;
+        // The bytes are ASCII.
+        self.push(std::str::from_utf8(&buf[..len]).unwrap_or("?"))?;
+        Ok(len)
     }
 
     /// A string scalar in the current context.
@@ -711,6 +797,7 @@ impl<'py> Body<'py> {
 
     fn track(&mut self, o: &Bound<'py, PyAny>) -> R<()> {
         // A container met twice would be written as an anchor and an alias.
+        self.seen.try_reserve(1).map_err(|_| no_memory())?;
         if self.seen.insert(o.as_ptr() as usize) {
             Ok(())
         } else {
@@ -733,11 +820,14 @@ impl<'py> Body<'py> {
                 } else if !(self.mapping_context && !self.indention) {
                     self.indent = prev + self.best_indent;
                 }
-                stack.push(Frame::Seq {
-                    list: l.clone(),
-                    i: 0,
-                    prev,
-                });
+                open_frame(
+                    stack,
+                    Frame::Seq {
+                        list: l.clone(),
+                        i: 0,
+                        prev,
+                    },
+                )?;
                 Ok(())
             }
             Value::Dict(d) => {
@@ -748,7 +838,7 @@ impl<'py> Body<'py> {
                 let items = self.entries(d)?;
                 let prev = self.indent;
                 self.indent = if prev < 0 { 0 } else { prev + self.best_indent };
-                stack.push(Frame::Map { items, i: 0, prev });
+                open_frame(stack, Frame::Map { items, i: 0, prev })?;
                 Ok(())
             }
             scalar => self.write_scalar(scalar),
@@ -766,7 +856,7 @@ impl<'py> Body<'py> {
         // `items()` copies the entries under the dict's own lock, so a dict that changes while
         // the copy is written (another thread, a signal handler) cannot be seen half-way.
         let list = d.items();
-        let mut items = Vec::with_capacity(list.len());
+        let mut items = vec_with_capacity(list.len())?;
         let (mut strs, mut others) = (0usize, 0usize);
         for entry in list.iter() {
             let k = entry.get_item(0)?;
@@ -782,18 +872,19 @@ impl<'py> Body<'py> {
         // key of another kind cannot be compared, which leaves the order as it was; other
         // mixes are left to the general writer.
         if self.sort_keys && items.len() > 1 && others == 0 {
-            let mut keyed: Vec<(String, usize)> = Vec::with_capacity(items.len());
+            // The keys are borrowed from the Python strings, not copied; the sort is in place
+            // (a stable sort would allocate, and keys are unique, so stability is moot).
+            let mut keyed: Vec<(&str, usize)> = vec_with_capacity(items.len())?;
             for (i, (k, _)) in items.iter().enumerate() {
                 let s = k.cast::<PyString>().map_err(PyErr::from)?;
-                keyed.push((s.to_str().map_err(|_| Stop::Bail)?.to_owned(), i));
+                keyed.push((s.to_str().map_err(|_| Stop::Bail)?, i));
             }
-            keyed.sort_by(|a, b| a.0.cmp(&b.0));
-            let mut slots: Vec<Option<(Bound<'py, PyAny>, Bound<'py, PyAny>)>> =
-                items.into_iter().map(Some).collect();
-            items = keyed
-                .into_iter()
-                .filter_map(|(_, i)| slots[i].take())
-                .collect();
+            keyed.sort_unstable();
+            let mut sorted = vec_with_capacity(items.len())?;
+            for &(_, i) in &keyed {
+                sorted.push(items[i].clone());
+            }
+            items = sorted;
         } else if self.sort_keys && items.len() > 1 && strs == 0 {
             return Err(Stop::Bail);
         }
@@ -893,38 +984,6 @@ fn int_text(o: &Bound<'_, PyAny>) -> PyResult<String> {
         return Ok(n.to_string());
     }
     Ok(o.str()?.to_str()?.to_owned())
-}
-
-fn escape(c: char) -> String {
-    let named = match c {
-        '\0' => "0",
-        '\u{7}' => "a",
-        '\u{8}' => "b",
-        '\t' => "t",
-        '\n' => "n",
-        '\u{b}' => "v",
-        '\u{c}' => "f",
-        '\r' => "r",
-        '\u{1b}' => "e",
-        '"' => "\"",
-        '\\' => "\\",
-        '\u{85}' => "N",
-        '\u{a0}' => "_",
-        '\u{2028}' => "L",
-        '\u{2029}' => "P",
-        _ => "",
-    };
-    if !named.is_empty() {
-        return format!("\\{named}");
-    }
-    let u = c as u32;
-    if u <= 0xff {
-        format!("\\x{u:02X}")
-    } else if u <= 0xffff {
-        format!("\\u{u:04X}")
-    } else {
-        format!("\\U{u:08X}")
-    }
 }
 
 /// The text of one document body and whether a bare root scalar left it open-ended, or None
