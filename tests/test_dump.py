@@ -799,6 +799,7 @@ def _in_a_memory_limited_process(backend, extra, limit_mb):
 )
 @pytest.mark.parametrize("backend", BACKENDS)
 @pytest.mark.parametrize("limit_mb", [40, 150, 400])
+@pytest.mark.slow
 def test_running_out_of_memory_is_a_memory_error(backend, limit_mb):
     # 2**24 leaves written to one line: gigabytes, far more than the limit.
     done = _in_a_memory_limited_process(backend, 24, limit_mb)

@@ -79,6 +79,23 @@ def test_a_load_of_all_different_keys_is_the_same_as_ever(native):
     assert rows["rows"] == [{"a": 1, "b": 2}] * 50
 
 
+def test_keys_repeated_after_a_run_of_distinct_keys_are_shared_again(native):
+    # The key cache switches itself off over a run of keys that never repeat; when keys do
+    # repeat afterwards it must come back, or every row would carry its own copies.
+    row = "  - {name: x, value: 1, kind: k, enabled: true}\n"
+    ids = "".join(f"  id{i}: {i}\n" for i in range(2000))
+    for text, key in (
+        ("head:\n" + ids + "rows:\n" + row * 3000, "rows"),
+        ("rows:\n" + row * 1500 + "head:\n" + ids + "more:\n" + row * 1500, None),
+    ):
+        doc = oneyaml.loads(text)
+        rows = doc[key] if key else doc["rows"] + doc["more"]
+        assert len(rows) == 3000
+        # Four names. The rows read before the cache is back on carry their own copies, at most
+        # one period of keys.
+        assert len({id(k) for r in rows for k in r}) <= 400
+
+
 def test_the_default_limits_object_is_recognised(native):
     from oneyaml import _api
 

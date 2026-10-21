@@ -130,13 +130,14 @@ jobs:
         run: |
           .venv/bin/python tools/build_pure.py wheels
           uv pip install -q --python .venv --no-deps wheels/*.whl
+      # Both steps include the slow-marked stress tests that the local gate leaves out.
       - name: Tests, native backend
         if: matrix.native
-        run: ONEYAML_BACKEND=native .venv/bin/python -m pytest -q -n auto
+        run: ONEYAML_BACKEND=native .venv/bin/python -m pytest -q -n auto -m "slow or not slow"
       - name: Tests, pure backend
         env:
           ONEYAML_TEST_BACKENDS: ${{ matrix.native && 'native,pure' || 'pure' }}
-        run: ONEYAML_BACKEND=pure .venv/bin/python -m pytest -q -n auto
+        run: ONEYAML_BACKEND=pure .venv/bin/python -m pytest -q -n auto -m "slow or not slow"
 
   # Release-profile native wheel and the pure wheel, each installed into a fresh
   # environment and imported. Adding a platform is a new matrix entry.

@@ -41,7 +41,14 @@ impl Lim {
     /// The `Limits()` object that stands for the defaults, once the package has registered it.
     /// A call with that very object skips reading its fields: a small document is parsed in
     /// about a microsecond, and reading nine integers out of an object was a tenth of that.
-    /// Only one object is ever held, and it is immutable.
+    ///
+    /// Only one object is ever held. `Limits` refuses attribute assignment, so its values are
+    /// fixed once it is built; code that goes round that with `object.__setattr__` is outside
+    /// what the class promises, and a load with the registered object would not see the change.
+    ///
+    /// The registration is per process, not per interpreter: the first interpreter to import the
+    /// module registers its object, and a later interpreter's default object is simply read
+    /// field by field as any other limits are. That is slower, never wrong.
     pub fn register_default(limits: &Bound<'_, PyAny>) -> PyResult<bool> {
         // Registered only if it really holds the defaults this build assumes.
         if Lim::from_py(limits)? != Lim::DEFAULT {

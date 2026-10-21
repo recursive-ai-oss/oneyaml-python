@@ -19,8 +19,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::thread::{self, ThreadId};
 
 use oneyaml::{
-    ColumnUnit, Document, DocumentMut, EditError, LineIndex, MergePatch, NodeId, NodeKind, NodeRef,
-    Patch, PatchErrorKind, PatchOp, ScalarStyle, Stream, Value,
+    ColumnUnit, Document, DocumentMut, EditError, LineIndex, MappingRef, MergePatch, NodeId,
+    NodeKind, NodeRef, Patch, PatchErrorKind, PatchOp, ScalarStyle, Stream, Value,
 };
 use oneyaml_syntax::decode_strict;
 use pyo3::buffer::PyBuffer;
@@ -159,6 +159,62 @@ impl Miss {
     }
 }
 
+/// The longest source text, in bytes, of a mapping this reads itself. An entry takes at least
+/// five bytes (`a: 1` and a line break), so a mapping this short has fewer than 32 entries,
+/// which is as many as the engine reads by scanning: from 64 nodes on it keeps a key index that
+/// survives edits, and a lookup through that is cheaper than any scan of ours. Counting entries
+/// to tell the two apart would cost more than the scan saves; the length is known without
+/// reading any.
+const SHORT: usize = 120;
+
+/// Whether `s`, written as a plain scalar, always reads as that very string: it starts with a
+/// letter, has only letters, digits and underscores, and is not one of the words either schema
+/// reads as null, a boolean or a number.
+fn plain_word(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.first().is_some_and(u8::is_ascii_alphabetic)
+        && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+        && ["null", "true", "false", "yes", "no", "on", "off", "y", "n"]
+            .iter()
+            .all(|w| !s.eq_ignore_ascii_case(w))
+}
+
+/// A lookup by text in a short mapping that reads the keys itself instead of asking the
+/// engine, whose scan of a mapping resolves every key it passes to a value (a few
+/// thousand instructions per key). `Some(answer)` is the engine's answer; `None` means this
+/// could not tell and the engine must be asked.
+///
+/// It answers only for a word that is the same string however it is written, and only where
+/// that is plain to see: every key before the one that reads as the word is a scalar and not
+/// the merge key, and that one carries no tag. The first such key is the answer (a stream with
+/// duplicate keys is refused when it is read, and an edit never makes one). A mapping
+/// too long to be sure of is left to the engine, so no key read here is large and no lookup in
+/// a mapping the engine indexes pays for a scan.
+fn near_get<'d>(m: MappingRef<'d>, s: &str) -> Option<Option<NodeRef<'d>>> {
+    let span = m.node().span();
+    if span.end - span.start > SHORT || !plain_word(s) {
+        return None;
+    }
+    for (k, v) in m.iter() {
+        let sc = if k.kind() == NodeKind::Scalar {
+            k.as_scalar()?
+        } else {
+            return None; // an alias, a collection: leave it to the engine
+        };
+        let text = sc.value();
+        if text == s {
+            let plain_or_quoted = matches!(
+                sc.style(),
+                ScalarStyle::Plain | ScalarStyle::SingleQuoted | ScalarStyle::DoubleQuoted
+            );
+            return (plain_or_quoted && matches!(k.tag(), Ok(None))).then_some(Some(v));
+        } else if text == "<<" {
+            return None;
+        }
+    }
+    Some(None)
+}
+
 type Entry<'d> = (Value, NodeRef<'d>);
 
 /// The entry of a mapping a token names: its key as a value, and the value node.
@@ -168,6 +224,9 @@ fn find_entry<'d>(map: NodeRef<'d>, tok: &Tok) -> Result<Option<Entry<'d>>, Miss
     };
     match tok {
         Tok::Text(s) => {
+            if let Some(found) = near_get(m, s) {
+                return Ok(found.map(|v| (Value::String(s.clone()), v)));
+            }
             if let Some(v) = m.get(s.as_str()) {
                 return Ok(Some((Value::String(s.clone()), v)));
             }
@@ -527,6 +586,29 @@ struct State {
     nodes: HashMap<usize, usize>,
     /// The codec the input was read in, fixed at parse time (a stream may have no documents).
     encoding: &'static str,
+    /// The input was UTF-8, which a stream is only built from when it is valid: its bytes are
+    /// then exactly its text, which the syntax tree can write out in runs. Any other encoding
+    /// goes through the engine's own writer.
+    text_is_bytes: bool,
+    /// Whether an edit has ever been tried: until then the syntax tree's source is the text.
+    touched: bool,
+}
+
+impl State {
+    /// The stream's current bytes, built from its text.
+    #[inline(never)]
+    fn written_bytes(&self) -> Vec<u8> {
+        if !self.text_is_bytes {
+            return self.stream.to_bytes();
+        }
+        let tree = self.stream.syntax();
+        // Never touched: the text is the source itself. Touched: the tree copies its runs.
+        if !self.touched {
+            tree.source().as_bytes().to_vec()
+        } else {
+            tree.emit().into_bytes()
+        }
+    }
 }
 
 /// The lock on a handle's state, which says who holds it for as long as it does.
@@ -632,6 +714,8 @@ pub fn parse(
                         lines: None,
                         nodes: HashMap::new(),
                         encoding,
+                        text_is_bytes: encoding == "utf-8",
+                        touched: false,
                     }),
                     lim,
                 })
@@ -691,6 +775,50 @@ impl Handle {
         st.stream
             .document_mut(d)
             .ok_or_else(|| PyIndexError::new_err(format!("no document {d} in the stream")))
+    }
+
+    /// The kind of the node at `toks` and, for a scalar (or any node when `whole`), its value.
+    fn value_at<'py>(
+        py: Python<'py>,
+        lim: Lim,
+        st: &mut State,
+        d: usize,
+        toks: &[Tok],
+        whole: bool,
+    ) -> PyResult<(&'static str, Option<Bound<'py, PyAny>>)> {
+        let cached = st.nodes.get(&d).copied();
+        let doc = Self::doc(st, d)?;
+        let n = walk(&doc, toks, true).map_err(|m| m.into_err(py))?;
+        let kind = kind_name(n);
+        if !whole && kind != "scalar" {
+            return Ok((kind, None));
+        }
+        let span = doc.span();
+        let mut b = Builder::for_walk(
+            py,
+            lim,
+            span.start,
+            cached.unwrap_or(0),
+            span.end - span.start,
+        );
+        let mut w = Walk {
+            nodes: cached,
+            ..Walk::default()
+        };
+        let r = feed(&mut b, &mut w, n, lim.digits, &|| count_nodes(&doc));
+        let root = b.take_root();
+        drop(b);
+        let counted = w.nodes;
+        if cached.is_none()
+            && let Some(total) = counted
+        {
+            st.nodes.insert(d, total);
+        }
+        if let Err(f) = r {
+            let text = st.stream.to_string();
+            return Err(to_pyerr(py, &text, f, None));
+        }
+        Ok((kind, root))
     }
 
     fn fail(py: Python<'_>, f: Fail) -> PyErr {
@@ -776,9 +904,31 @@ impl Handle {
     /// The stream's bytes, in the encoding it was read in.
     fn emit<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         guarded(py, || {
-            let st = self.lock(py)?;
-            let bytes = st.stream.to_bytes();
-            drop(st);
+            let bytes = {
+                let st = self.lock(py)?;
+                if st.text_is_bytes && !st.touched {
+                    // Untouched: the text is the source, copied once straight into the result.
+                    // A `bytes` object is not tracked by the collector, so making one cannot
+                    // run a finalizer while the lock is held.
+                    let src = st.stream.syntax().source().as_bytes();
+                    return PyBytes::new_with(py, src.len(), |out| {
+                        out.copy_from_slice(src);
+                        Ok(())
+                    });
+                }
+                st.written_bytes()
+            };
+            // Built with the lock released: allocating can run a finalizer, which must be
+            // able to use the document.
+            Ok(PyBytes::new(py, &bytes))
+        })
+    }
+
+    /// A test hook, not part of the backend interface (the pure backend has none): the stream's
+    /// bytes as the engine's own writer makes them, so that tests can compare the two writers.
+    fn _emit_engine<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        guarded(py, || {
+            let bytes = self.lock(py)?.stream.to_bytes();
             Ok(PyBytes::new(py, &bytes))
         })
     }
@@ -820,35 +970,23 @@ impl Handle {
         let toks = tokens(path)?;
         guarded(py, || {
             let mut st = self.lock(py)?;
-            let cached = st.nodes.get(&d).copied();
-            let doc = Self::doc(&mut st, d)?;
-            let n = walk(&doc, &toks, true).map_err(|m| m.into_err(py))?;
-            let span = doc.span();
-            let mut b = Builder::for_walk(
-                py,
-                self.lim,
-                span.start,
-                cached.unwrap_or(0),
-                span.end - span.start,
-            );
-            let mut w = Walk {
-                nodes: cached,
-                ..Walk::default()
-            };
-            let r = feed(&mut b, &mut w, n, self.lim.digits, &|| count_nodes(&doc));
-            let root = b.take_root();
-            drop(b);
-            let counted = w.nodes;
-            if cached.is_none()
-                && let Some(total) = counted
-            {
-                st.nodes.insert(d, total);
-            }
-            if let Err(f) = r {
-                let text = st.stream.to_string();
-                return Err(to_pyerr(py, &text, f, None));
-            }
-            Ok(root.unwrap_or_else(|| py.None().into_bound(py)))
+            let (_, value) = Self::value_at(py, self.lim, &mut st, d, &toks, true)?;
+            Ok(value.unwrap_or_else(|| py.None().into_bound(py)))
+        })
+    }
+
+    /// `(kind, value)` of the node: the value is built for a scalar and is `None` for a
+    /// collection, which a view reads by path. One walk and one call where a view needs both.
+    fn read<'py>(
+        &self,
+        py: Python<'py>,
+        d: usize,
+        path: &Bound<'py, PyAny>,
+    ) -> PyResult<(&'static str, Option<Bound<'py, PyAny>>)> {
+        let toks = tokens(path)?;
+        guarded(py, || {
+            let mut st = self.lock(py)?;
+            Self::value_at(py, self.lim, &mut st, d, &toks, false)
         })
     }
 
@@ -1016,6 +1154,7 @@ impl Handle {
                 .iter()
                 .any(|op| !matches!(op, PatchOp::Test { .. }));
             let mut st = self.lock(py)?;
+            touch(&mut st);
             st.stream
                 .apply_patch(d, &patch)
                 .map_err(|e| patch_pyerr(py, &e))?;
@@ -1031,6 +1170,7 @@ impl Handle {
         guarded(py, || {
             let patch = MergePatch::new(self.to_value(py, patch)?);
             let mut st = self.lock(py)?;
+            touch(&mut st);
             st.stream
                 .apply_merge_patch(d, &patch)
                 .map_err(|e| patch_pyerr(py, &e))?;
@@ -1129,23 +1269,25 @@ impl Handle {
     }
 
     /// Assign `value` at `path` (an existing node is replaced, a missing mapping key added).
+    /// True when the edit could move or replace a collection (the version moved).
     fn set(
         &self,
         py: Python<'_>,
         d: usize,
         path: &Bound<'_, PyAny>,
         value: &Bound<'_, PyAny>,
-    ) -> PyResult<()> {
+    ) -> PyResult<bool> {
         let toks = tokens(path)?;
         let v = self.to_value(py, value)?;
         guarded(py, || {
             let mut st = self.lock(py)?;
+            touch(&mut st);
             let structural = {
                 let mut doc = Self::doc(&mut st, d)?;
                 set_at(&mut doc, &toks, &v, py)?
             };
             changed(&mut st, structural);
-            Ok(())
+            Ok(structural)
         })
     }
 
@@ -1163,6 +1305,7 @@ impl Handle {
         let v = self.to_value(py, value)?;
         guarded(py, || {
             let mut st = self.lock(py)?;
+            touch(&mut st);
             let structural = {
                 let mut doc = Self::doc(&mut st, d)?;
                 let (id, len) = {
@@ -1195,6 +1338,7 @@ impl Handle {
         let toks = tokens(path)?;
         guarded(py, || {
             let mut st = self.lock(py)?;
+            touch(&mut st);
             {
                 let mut doc = Self::doc(&mut st, d)?;
                 let Some((last, parents)) = toks.split_last() else {
@@ -1288,6 +1432,12 @@ fn path_of<'d>(doc: &'d Document, tokens: &[String]) -> Result<Vec<Step<'d>>, Mi
         };
     }
     Ok(out)
+}
+
+/// Called before every attempt to change the stream, so that its source is never taken for the
+/// text once that may have moved on (an attempt that fails is covered too).
+fn touch(st: &mut State) {
+    st.touched = true;
 }
 
 fn changed(st: &mut State, structural: bool) {

@@ -29,6 +29,11 @@ const KEY_CACHE_MAX_LEN: usize = 128;
 const KEY_CACHE_MAX_ENTRIES: usize = 1 << 16;
 /// Key lookups between looks at whether the cache is paying for itself.
 const KEY_CACHE_WINDOW: usize = 1024;
+/// While the cache is off, this many keys at the start of every `KEY_CACHE_OFF_PERIOD` keys are
+/// looked up anyway, to notice when keys begin to repeat. A short period keeps the keys of the
+/// rows that follow a run of distinct keys from being built over and over.
+const KEY_CACHE_PROBE: usize = 32;
+const KEY_CACHE_OFF_PERIOD: usize = 256;
 /// From this many bytes of input the engine runs on a second thread while objects are built.
 /// Below it, starting a thread costs more than it saves.
 pub(crate) const PIPELINE_MIN: usize = 128 * 1024;
@@ -126,9 +131,12 @@ pub struct Builder<'py, 's> {
     /// Builds set aside while an outside anchor is built where it is first needed.
     detached: Vec<(Vec<Frame<'py, 's>>, Option<Bound<'py, PyAny>>, usize)>,
     keys: HashMap<&'s str, Bound<'py, PyString>, SeededState>,
-    /// Lookups and hits of the key cache in the current window. A document whose keys are all
-    /// different (a wide map of ids, say) gains nothing from the cache and would pay a hash and
-    /// an insert for every key, so a window with few hits turns the cache off for the load.
+    /// Keys seen so far, and the lookups and hits of the current stretch. A run of keys that are
+    /// all different (a wide map of ids, say) gains nothing from the cache and would pay a hash
+    /// and an insert for every key, so a window with few hits turns the cache off. While it is
+    /// off, a short probe at the start of every window looks keys up again, and the cache comes
+    /// back on as soon as keys repeat (the rows after such a map, say).
+    key_calls: usize,
     key_lookups: usize,
     key_hits: usize,
     keys_off: bool,
@@ -244,6 +252,7 @@ impl<'py, 's> Builder<'py, 's> {
             min_read: 0,
             detached: Vec::new(),
             keys: HashMap::with_hasher(SeededState::new()),
+            key_calls: 0,
             key_lookups: 0,
             key_hits: 0,
             keys_off: false,
@@ -524,10 +533,7 @@ impl<'py, 's> Builder<'py, 's> {
 
     /// A `str`, shared with earlier equal keys of this load when it is a key.
     fn string(&mut self, text: Cow<'s, str>, at_key: bool) -> Bound<'py, PyAny> {
-        if at_key
-            && !self.keys_off
-            && let Cow::Borrowed(s) = &text
-        {
+        if at_key && let Cow::Borrowed(s) = &text {
             let s: &'s str = s;
             if s.len() > KEY_CACHE_MAX_LEN {
                 return PyString::new(self.py, s).into_any();
@@ -538,24 +544,36 @@ impl<'py, 's> Builder<'py, 's> {
     }
 
     fn cached_key(&mut self, s: &'s str) -> Bound<'py, PyString> {
+        let pos = self.key_calls;
+        self.key_calls = pos.wrapping_add(1);
+        if self.keys_off && pos % KEY_CACHE_OFF_PERIOD >= KEY_CACHE_PROBE {
+            return PyString::new(self.py, s);
+        }
         self.key_lookups += 1;
-        if self.key_lookups == KEY_CACHE_WINDOW {
-            // Fewer than one key in eight seen before: not worth keeping.
-            if self.key_hits * 8 < KEY_CACHE_WINDOW {
-                self.keys_off = true;
-                self.keys = HashMap::with_hasher(SeededState::new());
-                return PyString::new(self.py, s);
+        let o = if let Some(o) = self.keys.get(s) {
+            self.key_hits += 1;
+            o.clone()
+        } else {
+            let o = PyString::new(self.py, s);
+            if self.keys.len() < KEY_CACHE_MAX_ENTRIES {
+                self.keys.insert(s, o.clone());
             }
+            o
+        };
+        let end = if self.keys_off {
+            self.key_lookups == KEY_CACHE_PROBE
+        } else {
+            self.key_lookups == KEY_CACHE_WINDOW
+        };
+        if end {
+            // Fewer than one key in eight seen before: not worth keeping.
+            let worth = self.key_hits * 8 >= self.key_lookups;
+            if !worth {
+                self.keys = HashMap::with_hasher(SeededState::new());
+            }
+            self.keys_off = !worth;
             self.key_lookups = 0;
             self.key_hits = 0;
-        }
-        if let Some(o) = self.keys.get(s) {
-            self.key_hits += 1;
-            return o.clone();
-        }
-        let o = PyString::new(self.py, s);
-        if self.keys.len() < KEY_CACHE_MAX_ENTRIES {
-            self.keys.insert(s, o.clone());
         }
         o
     }

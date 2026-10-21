@@ -622,3 +622,31 @@ def test_big_integer_under_a_lowered_interpreter_cap(api):
             assert api.loads("!!int '" + "1" * n + "'") == (10**n - 1) // 9
     finally:
         sys.set_int_max_str_digits(before)
+
+
+# ---- input types -----------------------------------------------------------------------------
+
+
+class _Text(str):
+    pass
+
+
+class _Bytes(bytes):
+    pass
+
+
+@pytest.mark.parametrize("make", [_Text, lambda s: _Bytes(s.encode())])
+def test_subclasses_of_str_and_bytes_read_as_the_plain_types_do(api, make):
+    text = "a: [1, two, {b: 3.5}]\nc: ~\n"
+    plain = api.loads(text)
+    assert api.loads(make(text)) == plain
+    assert api.loads_all(make(text + "---\nx\n")) == [plain, "x"]
+    with pytest.raises(YAMLError) as plain_error:
+        api.loads("a: [")
+    with pytest.raises(YAMLError) as sub_error:
+        api.loads(make("a: ["))
+    assert (sub_error.value.category, sub_error.value.line, sub_error.value.column) == (
+        plain_error.value.category,
+        plain_error.value.line,
+        plain_error.value.column,
+    )
