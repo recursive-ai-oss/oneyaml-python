@@ -109,13 +109,33 @@ _WS = " \t\r\n"
 
 
 def linecol(s: str, off: int) -> tuple[int, int]:
-    """The 1-based line and column of an offset (LF, CRLF and lone CR are one break each)."""
+    """The 1-based line and column of an offset (LF, CRLF and lone CR are one break each). A byte
+    order mark that starts a line of a document prefix takes no column."""
     head = s[:off]
     if "\r" in head:
         parts = re.split(r"\r\n|\r|\n", head)
-        return len(parts), len(parts[-1]) + 1
-    line = head.count("\n")
-    return line + 1, len(head) - (head.rfind("\n") + 1) + 1
+        line, col = len(parts), len(parts[-1]) + 1
+    else:
+        line = head.count("\n") + 1
+        col = len(head) - (head.rfind("\n") + 1) + 1
+    if "\ufeff" in head:
+        col -= _prefix_marks(s, off - col + 1, off)
+    return line, col
+
+
+def _prefix_marks(s: str, ls: int, off: int) -> int:
+    """How many byte order marks at the start of the line that begins at ``ls`` come before
+    ``off`` and begin a document prefix (so they are no column)."""
+    if not s.startswith("\ufeff", ls):
+        return 0
+    end = ls + 1
+    while s.startswith("\ufeff", end):
+        end += 1
+    if ls:
+        starts = [m.end() for m in _BREAK.finditer(s, 0, ls)]
+        if not (_in_prefix(s, ls, -1, starts) or _BOM_LINE(s, end)):
+            return 0
+    return min(end, off) - ls
 
 
 def _fail(s: str, off: int, message: str, category: str = "syntax") -> YAMLError:

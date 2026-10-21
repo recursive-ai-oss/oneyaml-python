@@ -598,6 +598,15 @@ def make_layout(doc: Doc, parent: int, anc: list[int], before_row: int | None = 
                 step = col(text, doc.st[v]) - col(text, entry_start(doc, k))
             if doc.kind[v] == K_SEQ and doc.sty[v] == "b" and seq_off is None:
                 seq_off = col(text, doc.st[v]) - col(text, entry_start(doc, k))
+    elif parent > 0 and doc.kind[parent] == K_SEQ and doc.sty[parent] == "b":
+        # A sequence nested in an item of this one lines up with it when this one is flush with
+        # its key (a plain `key:` line, no properties).
+        key = parent - 1
+        if doc.kind[key] == K_SCALAR and only_blanks_before(text, doc.st[parent]):
+            c = colon_after(doc, key)
+            if 0 <= c < doc.st[parent] and text[c + 1 : doc.st[parent]].strip(" \t\r\n") == "":
+                flush = col(text, doc.st[parent]) == col(text, entry_start(doc, key))
+                seq_off = 0 if flush else None
     if step is None or step <= 0:
         step = doc_step(doc, parent, anc)
     if seq_off is None or seq_off < 0:

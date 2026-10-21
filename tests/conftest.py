@@ -80,6 +80,25 @@ NATIVE_DOCUMENT_DEVIATIONS = {
         "test_edit_writes_the_exact_bytes_pure_first",
         "native-set a flow key that has a colon, a space and no value",
     ): "the native engine refuses this edit",
+    # The engine takes the block step for a new sequence even when its siblings' sequence is
+    # indented otherwise.
+    (
+        "test_a_new_sequence_copies_an_indented_sibling_sequence",
+        "native",
+    ): "the native engine indents a new sequence by the block step",
+    # The engine counts a byte order mark that starts a later prefix line as a column.
+    (
+        "test_a_byte_order_mark_that_begins_a_later_document_is_no_column",
+        "native",
+    ): "the native engine counts the mark as a column",
+    (
+        "test_a_mark_that_starts_a_prefix_line_is_zero_width_for_locate",
+        "native",
+    ): "the native engine counts the mark as a column",
+    (
+        "test_a_mark_that_starts_a_prefix_line_is_zero_width_for_errors",
+        "native",
+    ): "the native engine counts the mark as a column",
 }
 
 _DEVIATION_MODULES = ("test_pure_events", "test_load", "test_load_edges")

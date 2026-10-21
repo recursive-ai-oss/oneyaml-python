@@ -123,9 +123,12 @@ def test_a_collection_ends_where_its_last_block_scalar_does(api):
 # ---- byte order marks and anchored roots -------------------------------------------------------
 
 
-def test_a_byte_order_mark_inside_the_stream_is_a_character(api):
+def test_a_byte_order_mark_that_begins_a_later_document_is_no_column(api):
     doc = oneyaml.parse("a: 1\n...\n\ufeffb: 2\n")
-    assert doc.locate(("b",), document=1) == Location(3, 5, 3, 6)
+    assert doc.locate(("b",), document=1) == Location(3, 4, 3, 5)
+
+
+def test_a_byte_order_mark_at_the_start_of_the_stream_is_no_column(api):
     assert oneyaml.parse("\ufeffa: 1\n").locate("/a") == Location(1, 4, 1, 5)
 
 

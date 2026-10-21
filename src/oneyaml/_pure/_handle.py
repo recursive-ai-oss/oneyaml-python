@@ -159,7 +159,7 @@ class Handle:
         comment = _comment(doc, loc)
         pos = doc.ps[r] if k != K_ALIAS else doc.st[r]
         before = "".join([x.text for x in self._p.docs[:d]])
-        line, col = _linecol(before + doc.text[:pos])
+        line, col = T.linecol(before + doc.text, len(before) + pos)
         return style, tag, anchor, comment, line, col
 
     def locate(self, d: int, path: Any) -> tuple[int, int, int, int, str | None]:
@@ -173,8 +173,9 @@ class Handle:
         if doc.kind[last] == K_SCALAR and doc.sty[last] in "|>":
             end = _block_scalar_end(doc.text, doc.st[last])
         before = "".join([x.text for x in self._p.docs[:d]])
-        line, col = _linecol(before + doc.text[:start])
-        end_line, end_col = _linecol(before + doc.text[:end])
+        whole = before + doc.text
+        line, col = T.linecol(whole, len(before) + start)
+        end_line, end_col = T.linecol(whole, len(before) + end)
         return line, col, end_line, end_col, _comment(doc, loc)
 
     # ---- edits --------------------------------------------------------------------------
@@ -701,20 +702,6 @@ def _header(doc: Doc, r: int) -> str | None:
     if empty or headed:
         out += pending
     return "\n".join(out) if out else None
-
-
-def _linecol(head: str) -> tuple[int, int]:
-    n = 0
-    last = 0
-    for m in re.finditer(r"\r\n|\r|\n", head):
-        n += 1
-        last = m.end()
-    tail = head[last:]
-    # Only the mark that starts the stream is no column; one that begins a later document is
-    # a character of its line.
-    if n == 0 and tail.startswith("\ufeff"):
-        tail = tail[1:]
-    return n + 1, len(tail) + 1
 
 
 def parse(data: Any, limits: Any) -> Handle:
