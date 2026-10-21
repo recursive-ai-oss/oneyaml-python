@@ -64,7 +64,8 @@ pub fn category_of(d: &Diagnostic) -> &'static str {
         return "unresolved-tag";
     }
     match c.get() {
-        1..=999 => "syntax",
+        // Directive problems (a repeated %YAML, say) are errors in the text.
+        1..=999 | 1001..=1004 => "syntax",
         2000..=2999 => "limit",
         _ => "other",
     }
@@ -73,6 +74,11 @@ pub fn category_of(d: &Diagnostic) -> &'static str {
 /// 1-based line and column (columns count characters) and the 0-based character offset of a
 /// byte offset into `text`.
 pub fn locate(text: &str, at: usize) -> Option<(usize, usize, usize)> {
+    // A byte order mark is not a character of the text: columns on its line start after it.
+    if let Some(rest) = text.strip_prefix('\u{feff}') {
+        let bom = text.len() - rest.len();
+        return locate(rest, at.saturating_sub(bom));
+    }
     let lc = LineIndex::new(text).line_col(at, ColumnUnit::Char)?;
     let offset = text.get(..at)?.chars().count();
     Some((lc.line + 1, lc.column + 1, offset))

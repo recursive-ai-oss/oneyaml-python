@@ -1,6 +1,8 @@
 //! `events_text`: the event stream in the yaml-test-suite tree notation.
 
 use oneyaml_syntax::event::{CollectionStyle, Event, EventKind, ScalarStyle, Sourced};
+use std::collections::HashSet;
+
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
@@ -86,9 +88,35 @@ pub fn events_text<'py>(py: Python<'py>, data: &Bound<'py, PyAny>) -> PyResult<B
     let lines = with_text(py, data, lim.input, |text| {
         let settings = lim.settings();
         let mut lines: Vec<String> = Vec::new();
+        // The engine's events do not check that an alias has an anchor; an alias to a name not
+        // met earlier in its document is an error in the text, as in the other backend.
+        let mut anchors: HashSet<&str> = HashSet::new();
         for ev in oneyaml_syntax::events_with(text, &settings) {
             if matches!(ev.kind(), EventKind::Error(_)) {
                 return Err(to_pyerr(py, text, Fail::from_event(&ev), Some(lines)));
+            }
+            match ev.kind() {
+                EventKind::DocumentStart { .. } => anchors.clear(),
+                EventKind::Alias => {
+                    if let Some(name) = ev.alias_name()
+                        && !anchors.contains(name)
+                    {
+                        let fail = Fail::new(
+                            "syntax",
+                            format!("alias *{name} has no anchor"),
+                            ev.span().start,
+                        );
+                        return Err(to_pyerr(py, text, fail, Some(lines)));
+                    }
+                }
+                EventKind::Scalar { .. }
+                | EventKind::MappingStart { .. }
+                | EventKind::SequenceStart { .. } => {
+                    if let Some(a) = ev.anchor() {
+                        anchors.insert(a.name);
+                    }
+                }
+                _ => {}
             }
             if let Some(l) = line(&ev) {
                 lines.push(l);

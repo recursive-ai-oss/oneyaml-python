@@ -341,14 +341,14 @@ impl<'py, 's> Builder<'py, 's> {
         self.nodes += 1;
         let Some(&index) = self.anchors.get(name) else {
             return Err(Fail::new(
-                "other",
+                "syntax",
                 format!("alias *{name} has no anchor"),
                 at,
             ));
         };
         let Some(Some(a)) = self.slots.get(index) else {
             return Err(Fail::new(
-                "other",
+                "syntax",
                 format!("alias *{name} refers to a node that contains it"),
                 at,
             ));
