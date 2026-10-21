@@ -119,16 +119,8 @@ def _corpus():
 
 
 # Inputs on which the two backends' events differ. Strict: when they agree, the entry has to go.
-# The engine reads an undeclared tag handle as unresolved where the pure parser calls it a
-# syntax error (the kit lists the same case for the native backend); the pure parser rejects a
-# second byte order mark that opens a document, which the engine accepts.
-ENGINE_DEVIATIONS = [
-    "own:diagnostics/undeclared-tag-handle-is-a-syntax-error",
-    "own:parse/two-byte-order-marks-before-the-first-document",
-]
-# Not a kit case: the engine says an undeclared tag handle is unresolved, the pure parser calls it
-# a syntax error (both reject the stream).
-CATEGORY_DIFFERENCES = ["yaml-test-suite/data-2022-01-17/QLJ7"]
+ENGINE_DEVIATIONS: list[str] = []
+CATEGORY_DIFFERENCES: list[str] = []
 KNOWN = {c.replace("own:", "own/cases/", 1) for c in ENGINE_DEVIATIONS} | set(CATEGORY_DIFFERENCES)
 
 
@@ -165,6 +157,18 @@ def test_native_events_compose_the_nodes_the_pure_parser_does():
     assert not mismatched, mismatched[:3]
     if KIT:
         assert listed_seen == KNOWN
+
+
+@pytest.mark.parametrize("marks", [1, 2, 3])
+def test_every_byte_order_mark_that_opens_a_stream_is_no_character_of_the_marks(api, marks):
+    # Offsets, lines and columns start after the whole run of marks, as the engine's do.
+    text = "\ufeff" * marks + "a: 1\n"
+    kind, docs = composed(text, api.impl)
+    assert kind == "ok"
+    mapping, key, value = docs[0]
+    assert mapping[3] == (0, 0, 0, 5, 1, 0)
+    assert key[4] == (0, 0, 0, 1, 0, 1)
+    assert value[4] == (3, 0, 3, 4, 0, 4)
 
 
 # Where PyYAML puts a node that is not written: right after the indicator that promised it

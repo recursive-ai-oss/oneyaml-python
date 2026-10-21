@@ -168,7 +168,7 @@
  },
  "rt:own/parse/two-byte-order-marks-before-the-first-document": {
   "native": "ruamel reads a different value",
-  "pure": "ruamel accepts input that YAML 1.2 forbids"
+  "pure": "ruamel reads a different value"
  },
  "rt:own/parse/verbatim-tag-with-fragment": {
   "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
@@ -763,7 +763,7 @@
  },
  "safe:own/parse/two-byte-order-marks-before-the-first-document": {
   "native": "ruamel reads a different value",
-  "pure": "ruamel accepts input that YAML 1.2 forbids"
+  "pure": "ruamel reads a different value"
  },
  "safe:own/parse/verbatim-tag-with-fragment": {
   "native": "ruamel rejects input that YAML 1.2 accepts",

@@ -331,6 +331,13 @@ def compose_documents(
                 _check_sizes(events, scalar_size, documents)
             except Fail as exc:
                 raise _error_at(text, exc) from None
+    if text[:1] == "\ufeff":
+        # The engine counts offsets, lines and columns from after every byte order mark that
+        # opens the stream (a second one is no more a character than the first), and so do the
+        # marks here.
+        text = text.lstrip("\ufeff")
+        if native_events is None or parsed is not None:
+            events = parse_events(text, sys.maxsize if depth >= _NONE else depth)
     source = _Source(text, name)
     try:
         return _compose(

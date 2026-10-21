@@ -291,7 +291,7 @@
    "pure",
    "native"
   ],
-  "reason": "any number of byte order marks may begin a document (YAML 1.2 section 9.2); PyYAML keeps the second in the first key (the pure backend does not accept the second yet)"
+  "reason": "any number of byte order marks may begin a document (YAML 1.2 section 9.2); PyYAML keeps the second in the first key"
  },
  "own/roundtrip/explicit-and-complex-keys": {
   "backends": [
