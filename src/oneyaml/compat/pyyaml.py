@@ -9,37 +9,101 @@ exceptions with marks. What is not kept:
 * The limits of :class:`oneyaml.Limits` stay on, and merge keys count against the alias budget,
   so a document cannot expand without bound.
 * ``safe_load_all`` reads the whole stream before it yields the first document.
+
+Callbacks work as in PyYAML: ``add_constructor``, ``add_multi_constructor``,
+``add_implicit_resolver``, ``add_path_resolver``, ``YAMLObject``, and subclasses of the loaders,
+registered on the class they are called on and nowhere else (``add_constructor`` without a
+``Loader`` reaches ``Loader``, ``FullLoader`` and ``UnsafeLoader``, not ``SafeLoader``). A callback
+receives the loader and a node (``ScalarNode``, ``SequenceNode``, ``MappingNode`` with ``tag``,
+``value``, ``style`` / ``flow_style``, ``start_mark``, ``end_mark``) and may call
+``construct_scalar``, ``construct_sequence``, ``construct_mapping``, ``construct_pairs``,
+``construct_object``, ``construct_yaml_*`` and ``flatten_mapping`` on the loader. Exceptions a
+callback raises reach the caller as they are.
+
+Where callbacks differ from PyYAML:
+
+* A loader with no registrations, or with constructors for tags the document does not use, reads
+  through the active backend. A document that uses a registered tag is parsed by the pure Python
+  parser on either backend, and its nodes are built from that.
+* Standard collections are complete when a callback gets them, whatever ``deep`` says, and a
+  callback that returns a generator is run to its end at once. Callbacks run in document order
+  (a nested node before the node that holds it unless the outer callback asks for it first).
+* A merge key or ``=`` that is not a key stays the text it spells; PyYAML fails there. A merge
+  source that a callback turned into something else is merged from its node, as PyYAML does.
+* A mapping key that is a list or a mapping is frozen (tuple, ``FrozenMapping``), not refused.
+* Replacing ``construct_object``, ``construct_sequence`` or ``construct_mapping`` in a subclass
+  works, but nested calls through them are limited to 100 levels (a ``limit`` error).
+* ``add_representer`` and the ``Dumper`` arguments of the registration functions have no effect
+  until the dump side exists; ``YAMLObject.to_yaml`` raises ``NotImplementedError``.
+* ``!!python/...`` tags are never built, whatever the loader; a constructor registered for one
+  by the program is called.
 """
 
 from __future__ import annotations
 
 import re
+import sys
+import types
 from typing import Any
 
 from .. import _api
 from .._errors import YAMLError as _BaseError
+from .._limits import _NONE
+from . import _engine
+from ._engine import (
+    BaseConstructor,
+    BaseResolver,
+    Constructor,
+    FullConstructor,
+    Resolver,
+    ResolverError,
+    SafeConstructor,
+    UnsafeConstructor,
+)
+from ._nodes import CollectionNode, MappingNode, Node, ScalarNode, SequenceNode
 
 __all__ = [
+    "BaseConstructor",
     "BaseLoader",
+    "BaseResolver",
     "CBaseLoader",
     "CFullLoader",
     "CLoader",
     "CSafeLoader",
     "CUnsafeLoader",
+    "CollectionNode",
     "ComposerError",
+    "Constructor",
     "ConstructorError",
+    "FullConstructor",
     "FullLoader",
     "Loader",
+    "MappingNode",
     "Mark",
     "MarkedYAMLError",
+    "Node",
     "ParserError",
     "ReaderError",
+    "Resolver",
+    "ResolverError",
+    "SafeConstructor",
     "SafeLoader",
+    "ScalarNode",
     "ScannerError",
+    "SequenceNode",
+    "UnsafeConstructor",
     "UnsafeLoader",
     "YAMLError",
+    "YAMLObject",
+    "YAMLObjectMetaclass",
     "__version__",
     "__with_libyaml__",
+    "add_constructor",
+    "add_implicit_resolver",
+    "add_multi_constructor",
+    "add_path_resolver",
+    "compose",
+    "compose_all",
     "full_load",
     "full_load_all",
     "load",
@@ -227,30 +291,91 @@ def _read(stream: Any) -> tuple[str | bytes, str]:
     return data, getattr(stream, "name", "<file>")
 
 
-class BaseLoader:
-    """Reads every scalar as a string and ignores tags, as PyYAML's ``BaseLoader`` does."""
+def _stream_name(stream: Any) -> str:
+    if isinstance(stream, str):
+        return "<unicode string>"
+    if isinstance(stream, (bytes, bytearray, memoryview)):
+        return "<byte string>"
+    return getattr(stream, "name", "<file>")
 
-    _schema = "text"
+
+class _LoaderCore:
+    """Reading a stream and handing out its documents; the loaders add the tables to it.
+
+    A loader whose tables are the standard ones reads straight through the backend. One that
+    registered constructors tries the backend first and builds nodes only when the document
+    uses a tag the backend has no builder for. One that registered resolvers, or replaced a
+    standard constructor, always builds nodes.
+    """
+
+    _schema = "yaml11"
 
     def __init__(self, stream: Any) -> None:
+        BaseConstructor.__init__(self)
+        BaseResolver.__init__(self)
         self.stream = stream
-        self._input: tuple[str | bytes, str] | None = None
+        self.name = _stream_name(stream)
+        self._input: str | bytes | None = None
         self._docs: list[Any] | None = None
+        self._lazy = False  # _docs holds composed documents, not yet built values
         self._next = 0
 
-    def _load(self, multi: bool) -> Any:
+    # -- reading --
+
+    def _data(self) -> str | bytes:
         # The stream is read once, whatever is asked of it afterwards.
         if self._input is None:
-            self._input = _read(self.stream)
-        data, name = self._input
+            self._input = _read(self.stream)[0]
+        return self._input
+
+    def _compose(self, multi: bool) -> list[_engine._Doc]:
         try:
-            return _api._impl.load(data, _api._DEFAULT_LIMITS, multi, self._schema)
+            return _engine.compose_documents(
+                self, self._data(), self.name, multi, _api._DEFAULT_LIMITS
+            )
         except _BaseError as exc:
-            raise _convert(exc, name) from None
+            raise _convert(exc, self.name) from None
+
+    def _read_values(self, multi: bool) -> Any:
+        """The values by the backend, or the composed documents when callbacks must build them."""
+        data = self._data()
+        mode = _mode(type(self))
+        if mode < 2:
+            try:
+                return _api._impl.load(data, _api._DEFAULT_LIMITS, multi, self._schema)
+            except _BaseError as exc:
+                # A value the backend could not build (a tag it does not know, a tag that does
+                # not fit) may be one a callback takes over; every other error stands.
+                if mode == 0 or not getattr(exc, "construct", False):
+                    raise _convert(exc, self.name) from None
+        self._lazy = True
+        return self._compose(multi)
+
+    # -- the loader interface --
+
+    def _build(self, doc: _engine._Doc) -> Any:
+        self._doc = doc
+        self.anchors = doc.anchors
+        self.constructed_objects = {}
+        self.recursive_objects = {}
+        self.state_generators = []
+        digits = _api._DEFAULT_LIMITS._native[8]
+        self._cap = None if digits >= _NONE else digits
+        self._slow = _replaced(type(self))
+        try:
+            return self.construct_document(doc.root)
+        except RecursionError as exc:
+            # Only a callback that calls itself through the nesting of the input gets here: the
+            # library's own walk keeps an explicit stack.
+            raise self._error(
+                "the document nests too deeply for the constructors that were registered",
+                doc.root,
+                "limit",
+            ) from exc
 
     def _documents(self) -> list[Any]:
         if self._docs is None:
-            self._docs = self._load(True)
+            self._docs = self._read_values(True)
         return self._docs
 
     def check_data(self) -> bool:
@@ -261,53 +386,126 @@ class BaseLoader:
         if self._next >= len(docs):
             return None
         self._next += 1
-        return docs[self._next - 1]
+        item = docs[self._next - 1]
+        return self._build(item) if self._lazy else item
 
     def get_single_data(self) -> Any:
         # A stream of several documents is refused by the load itself, at the second one.
-        return self._load(False)
+        result = self._read_values(False)
+        if not self._lazy:
+            return result
+        return self._build(result[0]) if result else None
+
+    def check_node(self) -> bool:
+        return self._next < len(self._node_documents())
+
+    def get_node(self) -> Any:
+        docs = self._node_documents()
+        if self._next >= len(docs):
+            return None
+        self._next += 1
+        return docs[self._next - 1].root
+
+    def get_single_node(self) -> Any:
+        docs = self._compose(False)
+        return docs[0].root if docs else None
+
+    def _node_documents(self) -> list[_engine._Doc]:
+        if self._docs is None or not self._lazy:
+            self._lazy = True
+            self._docs = self._compose(True)
+        return self._docs
 
     def dispose(self) -> None:
         self._docs = None
         self._input = None
 
 
-class SafeLoader(BaseLoader):
+class BaseLoader(_LoaderCore, BaseConstructor, BaseResolver):
+    """Reads every scalar as a string and ignores tags, as PyYAML's ``BaseLoader`` does."""
+
+    _schema = "text"
+
+
+class SafeLoader(_LoaderCore, SafeConstructor, Resolver):
     """YAML 1.1 scalars and the standard tags, as PyYAML's ``SafeLoader``."""
 
-    _schema = "yaml11"
 
-
-class FullLoader(SafeLoader):
+class FullLoader(_LoaderCore, FullConstructor, Resolver):
     """Reads the same types as ``SafeLoader``; ``!!python/...`` tags are refused."""
 
 
-class UnsafeLoader(SafeLoader):
+class UnsafeLoader(_LoaderCore, UnsafeConstructor, Resolver):
     """Kept for its name. It builds nothing by running code: ``!!python/...`` tags are refused."""
 
 
-class Loader(SafeLoader):
+class Loader(_LoaderCore, Constructor, Resolver):
     """Kept for its name; the same as :class:`UnsafeLoader`."""
 
 
-class CBaseLoader(BaseLoader):
+# PyYAML's C loaders are separate classes with their own tables, so they are here.
+class CBaseLoader(_LoaderCore, BaseConstructor, BaseResolver):
+    _schema = "text"
+
+
+class CSafeLoader(_LoaderCore, SafeConstructor, Resolver):
     pass
 
 
-class CSafeLoader(SafeLoader):
+class CFullLoader(_LoaderCore, FullConstructor, Resolver):
     pass
 
 
-class CFullLoader(FullLoader):
+class CUnsafeLoader(_LoaderCore, UnsafeConstructor, Resolver):
     pass
 
 
-class CUnsafeLoader(UnsafeLoader):
+class CLoader(_LoaderCore, Constructor, Resolver):
     pass
 
 
-class CLoader(Loader):
-    pass
+# The tables as they are now; a loader whose tables are still these needs no callbacks.
+def _copy_resolvers(table: dict) -> dict:
+    return {k: v[:] for k, v in table.items()}
+
+
+_STANDARD = {
+    "yaml11": (
+        dict(SafeLoader.yaml_constructors),
+        _copy_resolvers(Resolver.yaml_implicit_resolvers),
+    ),
+    "text": ({}, {}),
+}
+
+
+def _replaced(cls: type) -> bool:
+    """True when a subclass replaced a method that builds collections."""
+    return any(getattr(cls, name) is not _engine._ORIGINAL[name] for name in _engine._REPLACEABLE)
+
+
+def _mode(cls: type) -> int:
+    """0: the backend reads alone. 1: the backend first, nodes if the document needs a callback.
+    2: nodes."""
+    constructors, resolvers = _STANDARD[cls._schema]
+    if (
+        cls.yaml_implicit_resolvers != resolvers
+        or cls.yaml_path_resolvers
+        or _replaced(cls)
+        or cls.construct_scalar is not _engine._ORIGINAL["construct_scalar"]
+        or cls.resolve is not BaseResolver.resolve
+    ):
+        return 2
+    own = cls.yaml_constructors
+    if own == constructors and not cls.yaml_multi_constructors:
+        return 0
+    if cls._schema == "text":
+        return 2
+    # A standard tag with another builder is for the nodes; a new tag is for the backend to
+    # report as unknown.
+    for tag, fn in constructors.items():
+        if tag is not None and own.get(tag) is not fn:
+            return 2
+    return 1
 
 
 # ---- functions ---------------------------------------------------------------------------------
@@ -354,3 +552,137 @@ def unsafe_load(stream: Any) -> Any:
 
 def unsafe_load_all(stream: Any):
     return load_all(stream, UnsafeLoader)
+
+
+# ---- registering callbacks ---------------------------------------------------------------------
+
+# What ``add_constructor`` and the others reach when no loader is named: PyYAML's three loaders
+# that are not the safe one.
+_DEFAULT_LOADERS = (Loader, FullLoader, UnsafeLoader)
+
+
+def add_constructor(tag: Any, constructor: Any, Loader: Any = None) -> None:  # noqa: N803
+    """Read nodes tagged ``tag`` with ``constructor(loader, node)``.
+
+    Without ``Loader`` this reaches ``Loader``, ``FullLoader`` and ``UnsafeLoader``, as in
+    PyYAML, and not ``SafeLoader``."""
+    for cls in _DEFAULT_LOADERS if Loader is None else (Loader,):
+        cls.add_constructor(tag, constructor)
+
+
+def add_multi_constructor(  # noqa: N803
+    tag_prefix: Any, multi_constructor: Any, Loader: Any = None
+) -> None:
+    """Read nodes whose tag starts with ``tag_prefix`` with
+    ``multi_constructor(loader, tag_suffix, node)``."""
+    for cls in _DEFAULT_LOADERS if Loader is None else (Loader,):
+        cls.add_multi_constructor(tag_prefix, multi_constructor)
+
+
+def add_implicit_resolver(  # noqa: N803
+    tag: str, regexp: Any, first: Any = None, Loader: Any = None, Dumper: Any = None
+) -> None:
+    """Give plain scalars that match ``regexp`` (and begin with a character of ``first``) the
+    tag ``tag``. ``Dumper`` is accepted for PyYAML's signature and has no effect yet."""
+    for cls in _DEFAULT_LOADERS if Loader is None else (Loader,):
+        cls.add_implicit_resolver(tag, regexp, first)
+
+
+def add_path_resolver(  # noqa: N803
+    tag: str, path: Any, kind: Any = None, Loader: Any = None, Dumper: Any = None
+) -> None:
+    """Give the node at ``path`` the tag ``tag``. ``Dumper`` has no effect yet."""
+    for cls in _DEFAULT_LOADERS if Loader is None else (Loader,):
+        cls.add_path_resolver(tag, path, kind)
+
+
+def compose(stream: Any, Loader: Any = Loader) -> Any:  # noqa: N803
+    """The node tree of the single document in ``stream``."""
+    loader = Loader(stream)
+    try:
+        return loader.get_single_node()
+    finally:
+        loader.dispose()
+
+
+def compose_all(stream: Any, Loader: Any = Loader):  # noqa: N803
+    """The node tree of every document in ``stream``."""
+    loader = Loader(stream)
+    try:
+        while loader.check_node():
+            yield loader.get_node()
+    finally:
+        loader.dispose()
+
+
+class YAMLObjectMetaclass(type):
+    """Registers a ``YAMLObject`` class with the loaders it names when it is defined."""
+
+    def __init__(cls, name: str, bases: tuple, kwds: dict) -> None:
+        super().__init__(name, bases, kwds)
+        if kwds.get("yaml_tag") is not None:
+            loaders = cls.yaml_loader if isinstance(cls.yaml_loader, list) else [cls.yaml_loader]
+            for loader in loaders:
+                loader.add_constructor(cls.yaml_tag, cls.from_yaml)
+            # Writing objects waits for the dump side; a dumper that exists takes the class.
+            dumper = cls.yaml_dumper
+            if dumper is not None and hasattr(dumper, "add_representer"):
+                dumper.add_representer(cls, cls.to_yaml)
+
+
+class YAMLObject(metaclass=YAMLObjectMetaclass):
+    """A class that reads itself from the tag ``yaml_tag``: subclass it and set the tag."""
+
+    yaml_loader: Any = [Loader, FullLoader, UnsafeLoader]  # noqa: RUF012 (PyYAML's own shape)
+    yaml_dumper: Any = None
+    yaml_tag: str | None = None
+    yaml_flow_style: bool | None = None
+
+    @classmethod
+    def from_yaml(cls, loader: Any, node: Node) -> Any:
+        """Make an instance from ``node``."""
+        return loader.construct_yaml_object(node, cls)
+
+    @classmethod
+    def to_yaml(cls, dumper: Any, data: Any) -> Any:
+        raise NotImplementedError("writing objects is not available in this module yet")
+
+
+# PyYAML spreads these over submodules; code reaches them as ``yaml.nodes.ScalarNode`` and the
+# like, so the same names are here.
+def _namespace(name: str, **members: Any) -> types.ModuleType:
+    module = types.ModuleType(f"{__name__}.{name}")
+    module.__dict__.update(members)
+    sys.modules[module.__name__] = module
+    return module
+
+
+nodes = _namespace(
+    "nodes",
+    Node=Node,
+    ScalarNode=ScalarNode,
+    CollectionNode=CollectionNode,
+    SequenceNode=SequenceNode,
+    MappingNode=MappingNode,
+)
+constructor = _namespace(
+    "constructor",
+    BaseConstructor=BaseConstructor,
+    SafeConstructor=SafeConstructor,
+    FullConstructor=FullConstructor,
+    UnsafeConstructor=UnsafeConstructor,
+    Constructor=Constructor,
+    ConstructorError=ConstructorError,
+)
+resolver = _namespace(
+    "resolver", BaseResolver=BaseResolver, Resolver=Resolver, ResolverError=ResolverError
+)
+error = _namespace("error", Mark=Mark, YAMLError=YAMLError, MarkedYAMLError=MarkedYAMLError)
+loader = _namespace(
+    "loader",
+    BaseLoader=BaseLoader,
+    SafeLoader=SafeLoader,
+    FullLoader=FullLoader,
+    UnsafeLoader=UnsafeLoader,
+    Loader=Loader,
+)
