@@ -78,6 +78,17 @@ NATIVE_ENGINE_DEVIATIONS = {
         "%YAML 1.2\n%YAML 1.2\n---\n",
     ): "own:diagnostics/second-yaml-directive-is-an-error",
     ("test_errors", "'a''b"): "own:diagnostics/unclosed-single-quote-after-escaped-quote",
+    # The engine reports these at the start of the construct, not at the line break after the
+    # properties.
+    ("test_errors", "a: 1\n!!map\n!!str b: c\n"): (
+        "own:diagnostics/properties-on-their-own-line-before-a-key-of-an-open-mapping"
+    ),
+    ("test_errors", "a: 1\n!!map\nb: 2\n"): (
+        "own:diagnostics/properties-on-their-own-line-before-a-key-of-an-open-mapping"
+    ),
+    # The engine accepts DEL and C1 controls in comments.
+    ("test_errors", "# c\x7f\na: 1\n"): "own:diagnostics/del-in-a-comment-is-an-error",
+    ("test_errors", "# c\x9f\na: 1\n"): "own:diagnostics/c1-control-in-a-comment-is-an-error",
     ("test_syntax_errors_have_one_based_positions", "a: 1\n- b\n"): (
         "own:diagnostics/sequence-entry-after-a-block-mapping"
     ),
