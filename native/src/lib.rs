@@ -8,12 +8,14 @@
 use pyo3::prelude::*;
 
 mod classes;
+mod document;
 mod errors;
 mod events;
 mod hook;
 mod input;
 mod limits;
 mod ops;
+mod pyvalue;
 mod reader;
 mod scalar;
 
@@ -79,6 +81,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ENGINE_VERSION", env!("ONEYAML_ENGINE_VERSION"))?;
     m.add_function(wrap_pyfunction!(probe, m)?)?;
     m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(document::parse, m)?)?;
+    m.add_class::<document::Handle>()?;
     m.add_function(wrap_pyfunction!(events_text, m)?)?;
     m.add_function(wrap_pyfunction!(_parse_only, m)?)?;
     m.add_function(wrap_pyfunction!(_panic_probe, m)?)?;

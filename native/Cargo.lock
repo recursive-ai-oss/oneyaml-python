@@ -23,7 +23,7 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "oneyaml"
 version = "1.1.0"
-source = "git+https://github.com/recursive-ai-oss/oneyaml-rust?rev=93e9e30f99c60d583f195dad1b4e9b51b37ddc1e#93e9e30f99c60d583f195dad1b4e9b51b37ddc1e"
+source = "git+https://github.com/recursive-ai-oss/oneyaml-rust?rev=dc943237ab0402f6d106d67d218fab536d47b217#dc943237ab0402f6d106d67d218fab536d47b217"
 dependencies = [
  "oneyaml-core",
  "oneyaml-syntax",
@@ -33,7 +33,7 @@ dependencies = [
 [[package]]
 name = "oneyaml-core"
 version = "1.1.0"
-source = "git+https://github.com/recursive-ai-oss/oneyaml-rust?rev=93e9e30f99c60d583f195dad1b4e9b51b37ddc1e#93e9e30f99c60d583f195dad1b4e9b51b37ddc1e"
+source = "git+https://github.com/recursive-ai-oss/oneyaml-rust?rev=dc943237ab0402f6d106d67d218fab536d47b217#dc943237ab0402f6d106d67d218fab536d47b217"
 
 [[package]]
 name = "oneyaml-native"
@@ -47,7 +47,7 @@ dependencies = [
 [[package]]
 name = "oneyaml-syntax"
 version = "0.1.2"
-source = "git+https://github.com/recursive-ai-oss/oneyaml-rust?rev=93e9e30f99c60d583f195dad1b4e9b51b37ddc1e#93e9e30f99c60d583f195dad1b4e9b51b37ddc1e"
+source = "git+https://github.com/recursive-ai-oss/oneyaml-rust?rev=dc943237ab0402f6d106d67d218fab536d47b217#dc943237ab0402f6d106d67d218fab536d47b217"
 dependencies = [
  "oneyaml-core",
 ]

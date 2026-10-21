@@ -21,7 +21,7 @@ pub struct Failure {
     pub at: usize,
 }
 
-fn fail<'s>(category: &'static str, message: impl Into<String>, at: usize) -> Op<'s> {
+pub fn fail<'s>(category: &'static str, message: impl Into<String>, at: usize) -> Op<'s> {
     Op::Fail(Box::new(Failure {
         category,
         message: message.into(),
@@ -67,7 +67,7 @@ pub enum Op<'s> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum CoreTag {
+pub enum CoreTag {
     Null,
     Bool,
     Int,
@@ -78,7 +78,7 @@ enum CoreTag {
     Binary,
 }
 
-fn core_tag(resolved: &str) -> Option<CoreTag> {
+pub fn core_tag(resolved: &str) -> Option<CoreTag> {
     Some(match resolved.strip_prefix("tag:yaml.org,2002:")? {
         "null" => CoreTag::Null,
         "bool" => CoreTag::Bool,
@@ -92,7 +92,7 @@ fn core_tag(resolved: &str) -> Option<CoreTag> {
     })
 }
 
-enum Tag<'s> {
+pub enum Tag<'s> {
     None,
     /// `!` alone.
     NonSpecific,
@@ -221,6 +221,19 @@ fn scalar_op<'s>(ev: &Sourced<'s, Event<'s>>, style: ScalarStyle, cap: usize) ->
         Ok(p) => p,
         Err(f) => return Op::Fail(f),
     };
+    scalar_parts(text, style == ScalarStyle::Plain, anchor, tag, at, cap)
+}
+
+/// The op for a scalar whose text, style and properties are known, from an event or from a
+/// node of a lossless document.
+pub fn scalar_parts<'s>(
+    text: Cow<'s, str>,
+    is_plain: bool,
+    anchor: Option<&'s str>,
+    tag: Tag<'s>,
+    at: usize,
+    cap: usize,
+) -> Op<'s> {
     let wrap = |inner: Op<'s>, custom: Option<Cow<'s, str>>| {
         if anchor.is_none() && custom.is_none() {
             inner
@@ -236,7 +249,7 @@ fn scalar_op<'s>(ev: &Sourced<'s, Event<'s>>, style: ScalarStyle, cap: usize) ->
         }
     };
     match tag {
-        Tag::None if style == ScalarStyle::Plain => wrap(plain(text, cap, at), None),
+        Tag::None if is_plain => wrap(plain(text, cap, at), None),
         Tag::None | Tag::NonSpecific => wrap(Op::Str(text, at), None),
         Tag::Core(c) => {
             let op = core_scalar(c, text, cap, at);
@@ -256,6 +269,11 @@ fn open_op<'s>(ev: &Sourced<'s, Event<'s>>, map: bool) -> Op<'s> {
         Ok(p) => p,
         Err(f) => return Op::Fail(f),
     };
+    open_parts(map, anchor, tag, at)
+}
+
+/// The op that opens a collection with the given properties.
+pub fn open_parts<'s>(map: bool, anchor: Option<&'s str>, tag: Tag<'s>, at: usize) -> Op<'s> {
     let custom = match tag {
         Tag::None | Tag::NonSpecific => None,
         Tag::Core(CoreTag::Seq) if !map => None,

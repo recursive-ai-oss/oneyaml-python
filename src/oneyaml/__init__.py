@@ -13,6 +13,7 @@ from types import ModuleType
 
 from . import _api
 from ._api import load, load_all, loads, loads_all
+from ._document import Document, MappingView, Position, SequenceView, StaleViewError, parse
 from ._errors import LimitError, ParseError, YAMLError
 from ._limits import Limits
 from ._types import FrozenMapping, Tagged
@@ -23,6 +24,11 @@ except PackageNotFoundError:  # running from a source tree that is not installed
     __version__ = "0+unknown"
 
 __all__ = [
+    "Document",
+    "MappingView",
+    "Position",
+    "SequenceView",
+    "StaleViewError",
     "FrozenMapping",
     "LimitError",
     "Limits",
@@ -36,6 +42,7 @@ __all__ = [
     "load_all",
     "loads",
     "loads_all",
+    "parse",
 ]
 
 _CHOICES = ("auto", "native", "pure")

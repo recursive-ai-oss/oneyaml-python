@@ -80,7 +80,7 @@ struct Frame<'py, 's> {
     bytes: usize,
 }
 
-struct Builder<'py, 's> {
+pub struct Builder<'py, 's> {
     py: Python<'py>,
     lim: Lim,
     multi: bool,
@@ -106,9 +106,27 @@ struct Builder<'py, 's> {
     key_start: usize,
 }
 
-type R<T> = Result<T, Fail>;
+pub type R<T> = Result<T, Fail>;
 
 impl<'py, 's> Builder<'py, 's> {
+    /// A builder for objects made from a walk over a lossless document (see `document`), whose
+    /// positions are byte offsets into the stream and whose own document begins at `doc_start`.
+    pub fn for_walk(py: Python<'py>, lim: Lim, doc_start: usize) -> Self {
+        let mut b = Self::new(py, lim, false);
+        b.doc_start = doc_start;
+        b
+    }
+
+    /// Feed one op of the walk.
+    pub fn feed(&mut self, op: Op<'s>) -> R<()> {
+        self.op(op)
+    }
+
+    /// The finished top-level object, if one is complete.
+    pub fn take_root(&mut self) -> Option<Bound<'py, PyAny>> {
+        self.root.take()
+    }
+
     fn new(py: Python<'py>, lim: Lim, multi: bool) -> Self {
         Builder {
             py,
