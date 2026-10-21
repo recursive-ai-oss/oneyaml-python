@@ -145,8 +145,7 @@ def test_edits_through_a_word_land_where_a_load_says(backends):
         expected[word] = "changed"
         if results[0][0] == "ok":
             assert results[0][1] == expected, (seed, word, text)
-        # Next to a key with a tag of its own the backends differ (the pure one takes that key
-        # for the word); that is left out here.
+        # Next to a key with a tag of its own the backends differ; the test below pins that.
         if "!local" not in text:
             assert results[0] == results[1], (seed, word, text)
         done += 1
@@ -177,9 +176,27 @@ def test_removing_through_a_word_removes_what_a_load_says(backends):
         if word in loaded:
             expected = {k: v for k, v in loaded.items() if k != word}
             assert results[0] == ("ok", expected), (seed, word, text)
-        # Next to a key with a tag of its own the backends differ (the pure one takes that key
-        # for the word); that is left out here.
+        # Next to a key with a tag of its own the backends differ; the test below pins that.
         if "!local" not in text:
             assert results[0] == results[1], (seed, word, text)
         done += 1
     assert done > 50
+
+
+@pytest.mark.native_only
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "the pure backend takes a key with a tag of its own (`!local yes`) for the word `yes` "
+        "when setting it and replaces that key's value; the native backend adds a plain `yes` "
+        "key next to it, as a load and a read see it"
+    ),
+)
+def test_setting_a_word_next_to_a_tagged_key_agrees(backends):
+    text = "!local yes: v\nb: 1\n"
+    results = []
+    for b in backends:
+        h = b.parse(text, Limits())
+        h.set(0, ["yes"], "changed")
+        results.append(h.value(0, []))
+    assert results[0] == results[1]

@@ -159,8 +159,13 @@ impl Miss {
     }
 }
 
-/// Entries read one by one before a lookup is left to the engine's key index.
-const NEAR: usize = 24;
+/// The longest source text, in bytes, of a mapping this reads itself. An entry takes at least
+/// five bytes (`a: 1` and a line break), so a mapping this short has fewer than 32 entries,
+/// which is as many as the engine reads by scanning: from 64 nodes on it keeps a key index that
+/// survives edits, and a lookup through that is cheaper than any scan of ours. Counting entries
+/// to tell the two apart would cost more than the scan saves; the length is known without
+/// reading any.
+const SHORT: usize = 120;
 
 /// Whether `s`, written as a plain scalar, always reads as that very string: it starts with a
 /// letter, has only letters, digits and underscores, and is not one of the words either schema
@@ -169,31 +174,28 @@ fn plain_word(s: &str) -> bool {
     let b = s.as_bytes();
     b.first().is_some_and(u8::is_ascii_alphabetic)
         && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_')
-        && !matches!(
-            s.to_ascii_lowercase().as_str(),
-            "null" | "true" | "false" | "yes" | "no" | "on" | "off" | "y" | "n"
-        )
+        && ["null", "true", "false", "yes", "no", "on", "off", "y", "n"]
+            .iter()
+            .all(|w| !s.eq_ignore_ascii_case(w))
 }
 
-/// A lookup by text that reads the first entries of a mapping instead of asking the engine,
-/// whose lookup first resolves every key of the mapping to build an index (a few thousand
-/// instructions per key). `Some(answer)` is the engine's answer; `None` means this could not
-/// tell and the engine must be asked.
+/// A lookup by text in a short mapping that reads the keys itself instead of asking the
+/// engine, whose scan of a mapping resolves every key it passes to a value (a few
+/// thousand instructions per key). `Some(answer)` is the engine's answer; `None` means this
+/// could not tell and the engine must be asked.
 ///
 /// It answers only for a word that is the same string however it is written, and only where
-/// that is plain to see: every key looked at is a scalar, none is the merge key, and the one
-/// that reads as the word (there cannot be two: a stream with duplicate keys is refused when
-/// it is read, and an edit never makes one) carries no tag. A key past the first `NEAR` is not
-/// looked at, so a word found early is answered and one not found there is left to the engine.
+/// that is plain to see: every key before the one that reads as the word is a scalar and not
+/// the merge key, and that one carries no tag. The first such key is the answer (a stream with
+/// duplicate keys is refused when it is read, and an edit never makes one). A mapping
+/// too long to be sure of is left to the engine, so no key read here is large and no lookup in
+/// a mapping the engine indexes pays for a scan.
 fn near_get<'d>(m: MappingRef<'d>, s: &str) -> Option<Option<NodeRef<'d>>> {
-    if !plain_word(s) {
+    let span = m.node().span();
+    if span.end - span.start > SHORT || !plain_word(s) {
         return None;
     }
-    let mut found = None;
-    for (seen, (k, v)) in m.iter().enumerate() {
-        if seen == NEAR {
-            return found.map(Some);
-        }
+    for (k, v) in m.iter() {
         let sc = if k.kind() == NodeKind::Scalar {
             k.as_scalar()?
         } else {
@@ -205,15 +207,12 @@ fn near_get<'d>(m: MappingRef<'d>, s: &str) -> Option<Option<NodeRef<'d>>> {
                 sc.style(),
                 ScalarStyle::Plain | ScalarStyle::SingleQuoted | ScalarStyle::DoubleQuoted
             );
-            if found.is_some() || !plain_or_quoted || !matches!(k.tag(), Ok(None)) {
-                return None;
-            }
-            found = Some(v);
+            return (plain_or_quoted && matches!(k.tag(), Ok(None))).then_some(Some(v));
         } else if text == "<<" {
             return None;
         }
     }
-    Some(found)
+    Some(None)
 }
 
 type Entry<'d> = (Value, NodeRef<'d>);
@@ -925,7 +924,8 @@ impl Handle {
         })
     }
 
-    /// The stream's bytes as the engine writes them (for tests that compare the faster paths).
+    /// A test hook, not part of the backend interface (the pure backend has none): the stream's
+    /// bytes as the engine's own writer makes them, so that tests can compare the two writers.
     fn _emit_engine<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         guarded(py, || {
             let bytes = self.lock(py)?.stream.to_bytes();
