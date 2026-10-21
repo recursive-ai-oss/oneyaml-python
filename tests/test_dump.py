@@ -1007,3 +1007,95 @@ def test_backends_write_the_same_float_digits():
     assert _native.dump([values], (2, True, False), False) == _pure.dump(
         [values], (2, True, False), False
     )
+
+
+# ---- exact ties, malformed entries, free-threaded runs ---------------------------------------
+
+
+def test_floats_that_are_exact_midpoints_are_written_as_repr_gives_them(d):
+    # Each of these is exactly half way between two equally short decimals.
+    for x in (2.0**-25, 2.0**-24, 3 * 2.0**-25, 0.0010004043579101562, 5.960464477539062e-07):
+        assert d.dumps(x) == _expected_float(x) + "\n", x
+    for k in range(1, 40):
+        for j in range(1, 400, 2):
+            for x in (j * 2.0**-k, -j * 2.0**-k):
+                assert d.dumps(x) == _expected_float(x) + "\n", (j, k)
+
+
+@pytest.mark.skipif(not HAS_NATIVE, reason="needs the native backend")
+def test_backends_write_the_same_digits_for_dyadic_floats():
+    rng = random.Random(77)
+    values = []
+    for k in range(0, 75):
+        for _ in range(60):
+            j = rng.randrange(1, 1 << rng.randint(1, 53)) | 1
+            for x in (j * 2.0**-k, j * 2.0**k, j * 2.0**-k * 10 ** (k % 7)):
+                if math.isfinite(x) and x:
+                    values += [x, math.nextafter(x, 0.0), math.nextafter(x, math.inf)]
+    opts = (2, True, False)
+    bad = [
+        x
+        for x in values
+        if _native.dump([x], opts, False) != _pure.dump([x], opts, False)
+        or _pure.dump([x], opts, False) != _expected_float(x) + "\n"
+    ]
+    assert len(bad) == 0, bad[:5]
+
+
+def _message(mod, value, flow):
+    with pytest.raises(ValueError) as info:
+        mod.dump([value], (2, flow, False), False)
+    return str(info.value)
+
+
+@pytest.mark.skipif(not HAS_NATIVE, reason="needs the native backend")
+@pytest.mark.parametrize("flow", [False, True])
+@pytest.mark.parametrize("name", ["pairs as triples", "pairs of one", "tuple subclass entries"])
+def test_malformed_items_entries_have_one_message_on_both_backends(name, flow):
+    value = _PROTOCOL_CASES[name]
+    if name == "tuple subclass entries":
+        value = _Singles(a=1)
+    assert _message(_native, value, flow) == _message(_pure, value, flow)
+    assert "(key, value)" in _message(_pure, value, flow)
+
+
+FREE_THREADED = bool(__import__("sysconfig").get_config_var("Py_GIL_DISABLED"))
+
+_THREAD_SCRIPT = """
+import sys, threading
+import oneyaml
+shared = {f'k{i}': [i, 'x'] for i in range(500)}
+stop = threading.Event()
+def mutate():
+    i = 0
+    while not stop.is_set():
+        i += 1
+        shared[f'n{i % 50}'] = i
+        shared.pop(f'n{(i + 25) % 50}', None)
+ts = [threading.Thread(target=mutate) for _ in range(2)]
+for t in ts: t.start()
+seen = set()
+try:
+    for _ in range(300):
+        try:
+            oneyaml.dumps(shared); seen.add('ok')
+        except RuntimeError:
+            seen.add('RuntimeError')
+finally:
+    stop.set()
+    for t in ts: t.join()
+print(sorted(seen))
+"""
+
+
+@pytest.mark.skipif(not (HAS_NATIVE and FREE_THREADED), reason="needs a free-threaded build")
+@pytest.mark.parametrize("gil", ["0", "1"])
+def test_dicts_changed_by_threads_never_panic_with_the_gil_on_or_off(gil):
+    # The way a dict is walked does not depend on whether the GIL is on at the moment the
+    # dump starts (an extension import can switch it on for a while on a free-threaded build).
+    env = {**os.environ, "PYTHON_GIL": gil, "ONEYAML_BACKEND": "native"}
+    run = subprocess.run(
+        [sys.executable, "-c", _THREAD_SCRIPT], env=env, capture_output=True, text=True, timeout=120
+    )
+    assert run.returncode == 0, run.stderr[-500:]
+    assert set(eval(run.stdout)) <= {"ok", "RuntimeError"}

@@ -327,12 +327,35 @@ def _empty(kind: int, tag: str | None) -> str:
     return f"{tag} {text}" if tag else text
 
 
+_BAD_PAIR = "expected a (key, value) pair"
+
+
+def _pairs(entries):
+    """The entries of a mapping other than a dict, each checked to be exactly a key and a value
+    (any iterable of two items, as ``k, v = entry`` takes)."""
+    for e in entries:
+        if type(e) is tuple:
+            if len(e) != 2:
+                raise ValueError(_BAD_PAIR)
+            yield e
+            continue
+        it = iter(e)
+        try:
+            k = next(it)
+            v = next(it)
+        except StopIteration:
+            raise ValueError(_BAD_PAIR) from None
+        for _ in it:
+            raise ValueError(_BAD_PAIR)
+        yield k, v
+
+
 def _frame(kind: int, obj: Any, col: int, inline: bool) -> list | None:
     """The frame for a collection's entries, or None when it has none. A dict, list or tuple
     is empty by its own length; a subclass by its first entry, since its ``__len__`` may say
     anything."""
     t = type(obj)
-    it = iter(obj.items()) if kind == _MAP else iter(obj)
+    it = iter(obj) if kind != _MAP else (iter(obj.items()) if t is dict else _pairs(obj.items()))
     if not (t is dict or t is list or t is tuple):
         first = next(it, _END)
         if first is _END:

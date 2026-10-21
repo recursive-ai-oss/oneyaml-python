@@ -16,8 +16,8 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pyo3::exceptions::{PyMemoryError, PyRuntimeError, PyTypeError, PyValueError};
-use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::sync::critical_section::with_critical_section;
 use pyo3::types::list::BoundListIterator;
 use pyo3::types::{
     PyBool, PyByteArray, PyBytes, PyDict, PyFloat, PyInt, PyIterator, PyList, PyMemoryView,
@@ -36,8 +36,9 @@ const TRACK_FROM: usize = 64;
 const MAX_IMPLICIT_KEY: usize = 1024;
 const BASE64_LINE: usize = 76;
 const YAML_TAG: &str = "tag:yaml.org,2002:";
-/// Output bytes between looks for a pending signal. Every entry writes something, so this
-/// bounds the work between looks whatever the entries are.
+/// Output bytes between looks for a pending signal: checked between entries and inside long
+/// double-quoted and literal scalars. Copying one huge single-quoted or binary scalar is not
+/// interrupted part way, nor is a single call into the interpreter.
 const SIGNAL_BYTES: usize = 1 << 15;
 
 /// Operations on the on-path set, counted so a test can check the work is linear.
@@ -107,10 +108,7 @@ fn unpack_pair<'py>(entry: Bound<'py, PyAny>) -> PyResult<(Bound<'py, PyAny>, Bo
     if let Ok(t) = entry.cast_exact::<PyTuple>() {
         return match t.as_slice() {
             [k, v] => Ok((k.clone(), v.clone())),
-            items => Err(PyValueError::new_err(format!(
-                "expected a (key, value) pair, got {} items",
-                items.len()
-            ))),
+            _ => Err(PyValueError::new_err("expected a (key, value) pair")),
         };
     }
     let mut it = entry.try_iter()?;
@@ -185,17 +183,21 @@ impl<'py> Frame<'py> {
                 None => None,
             },
             Src::Dict(it, d, done, size) => {
-                // Another change to the dict would panic inside the iterator: look first.
-                if d.len() != *size {
-                    return Err(PyRuntimeError::new_err(
-                        "dictionary changed size during iteration",
-                    ));
-                }
-                if *done >= *size {
-                    return Ok(None);
-                }
-                *done += 1;
-                it.next().map(|(k, v)| Item::Pair(k, v))
+                // The iterator panics when the dict changed size. Look first, and look and
+                // step under one critical section so no other thread can change it between.
+                let step = with_critical_section(d.as_any(), || {
+                    if d.len() != *size {
+                        return Err(PyRuntimeError::new_err(
+                            "dictionary changed size during iteration",
+                        ));
+                    }
+                    if *done >= *size {
+                        return Ok(None);
+                    }
+                    *done += 1;
+                    Ok(it.next().map(|(k, v)| Item::Pair(k, v)))
+                });
+                step?
             }
             Src::List(it) => it.next().map(Item::One),
             Src::Tuple(t, i) => {
@@ -256,8 +258,6 @@ struct Writer<'py> {
     path: HashSet<usize>,
     /// Output length at which to look for a pending signal next.
     next_poll: usize,
-    /// Whether the interpreter has a GIL (a free-threaded build may run without).
-    gil: bool,
 }
 
 pub fn dump<'py>(
@@ -280,12 +280,6 @@ pub fn dump<'py>(
         key: String::new(),
         path: HashSet::new(),
         next_poll: SIGNAL_BYTES,
-        gil: py
-            .import("sys")
-            .and_then(|m| m.getattr("_is_gil_enabled"))
-            .and_then(|f| f.call0())
-            .and_then(|r| r.is_truthy())
-            .unwrap_or(true),
     };
     for (i, obj) in objs.iter().enumerate() {
         if i > 0 || start {
@@ -563,9 +557,10 @@ fn push_escape(out: &mut String, c: char) {
 }
 
 /// A double-quoted scalar. Runs of characters that need no escape are copied whole.
-fn push_double(out: &mut String, s: &str) -> PyResult<()> {
+fn push_double(py: Python<'_>, out: &mut String, s: &str) -> PyResult<()> {
     reserve(out, 2)?;
     out.push('"');
+    let mut next_poll = out.len() + SIGNAL_BYTES;
     let b = s.as_bytes();
     let mut start = 0;
     let mut i = 0;
@@ -581,6 +576,10 @@ fn push_double(out: &mut String, s: &str) -> PyResult<()> {
         }
         reserve(out, i - start + 8)?;
         out.push_str(&s[start..i]);
+        if out.len() >= next_poll {
+            next_poll = out.len() + SIGNAL_BYTES;
+            poll_signals(py)?;
+        }
         let Some(ch) = s[i..].chars().next() else {
             break;
         };
@@ -595,7 +594,13 @@ fn push_double(out: &mut String, s: &str) -> PyResult<()> {
 }
 
 /// A literal block scalar without its final line break.
-fn push_literal(out: &mut String, header: &str, s: &str, cpad: usize) -> PyResult<()> {
+fn push_literal(
+    py: Python<'_>,
+    out: &mut String,
+    header: &str,
+    s: &str,
+    cpad: usize,
+) -> PyResult<()> {
     reserve(out, header.len() + 4)?;
     out.push_str(header);
     let body = if let Some(rest) = s.strip_suffix('\n') {
@@ -608,7 +613,12 @@ fn push_literal(out: &mut String, header: &str, s: &str, cpad: usize) -> PyResul
         s
     };
     out.push('\n');
+    let mut next_poll = out.len() + SIGNAL_BYTES;
     for (i, line) in body.split('\n').enumerate() {
+        if out.len() >= next_poll {
+            next_poll = out.len() + SIGNAL_BYTES;
+            poll_signals(py)?;
+        }
         // Room for the line, its padding, the break before it and one spare byte.
         reserve(out, line.len() + cpad + 2)?;
         if i > 0 {
@@ -624,7 +634,13 @@ fn push_literal(out: &mut String, header: &str, s: &str, cpad: usize) -> PyResul
 
 /// A string as scalar text. `cpad` is the column of a block scalar's lines, or None where the
 /// place cannot hold one (a key, flow style, an explicit value).
-fn push_string(out: &mut String, s: &str, flow: bool, cpad: Option<usize>) -> PyResult<()> {
+fn push_string(
+    py: Python<'_>,
+    out: &mut String,
+    s: &str,
+    flow: bool,
+    cpad: Option<usize>,
+) -> PyResult<()> {
     if s.is_empty() {
         reserve(out, 3)?;
         out.push_str("''");
@@ -644,7 +660,7 @@ fn push_string(out: &mut String, s: &str, flow: bool, cpad: Option<usize>) -> Py
         return Ok(());
     }
     if sc.flags & F_ESC != 0 {
-        return push_double(out, s);
+        return push_double(py, out, s);
     }
     if sc.flags & F_NL != 0 {
         let lines_ok = !s.contains(" \n") && !s.contains("\t\n");
@@ -654,9 +670,9 @@ fn push_string(out: &mut String, s: &str, flow: bool, cpad: Option<usize>) -> Py
                     && !matches!(b[0], b' ' | b'\t' | b'\n')
                     && !matches!(b[b.len() - 1], b' ' | b'\t') =>
             {
-                push_literal(out, "|", s, c)
+                push_literal(py, out, "|", s, c)
             }
-            _ => push_double(out, s),
+            _ => push_double(py, out, s),
         };
     }
     if plain_ok(s, &sc, flow) {
@@ -737,14 +753,40 @@ impl std::fmt::Write for StackBuf {
     }
 }
 
+/// Whether `f` is exactly half way between two `n`-digit decimals, the one case where Rust's
+/// shortest digits can differ from Python's (Python takes the even last digit; Rust may take
+/// the other). Such a value has an exact decimal expansion of `n + 1` digits ending in 5.
+///
+/// A double is `m * 2**q` with `m` odd; with `q < 0` its expansion is `m * 5**-q` over
+/// `10**-q`, so the digit count is that of the integer `m * 5**-q`. Values that are whole
+/// numbers cannot be such a midpoint, and neither can ones needing more than 27 factors of 5.
+fn maybe_tie(f: f64, n: usize) -> bool {
+    let bits = f.to_bits();
+    let biased = ((bits >> 52) & 0x7ff) as i32;
+    let frac = bits & ((1u64 << 52) - 1);
+    if biased == 0 {
+        return false; // subnormal: -q is far above 27
+    }
+    let mut m = frac | (1u64 << 52);
+    let mut q = biased - 1075;
+    let tz = m.trailing_zeros() as i32;
+    m >>= tz;
+    q += tz;
+    if !(-27..0).contains(&q) {
+        return false;
+    }
+    let exact = u128::from(m) * 5u128.pow(q.unsigned_abs());
+    exact.ilog10() as usize + 1 == n + 1
+}
+
 /// A float as Python's `repr` writes it, with a point in the mantissa when the exponent form is
 /// used, so every reader sees a float.
 ///
 /// The digits are Rust's shortest ones, which are Python's too except where two shortest forms
 /// are equally near the value (an exact tie: the value is exactly half way between them) and
-/// Rust picks the other one. A tie needs a value with at most 18 significant digits that is a
-/// multiple of 2**-18 and a shortest form of 15 or more digits; for those the interpreter itself
-/// writes the digits, so the two writers cannot differ.
+/// Rust picks the other one. `maybe_tie` finds exactly those values (it needs a shortest form
+/// of 15 or more digits); for them the interpreter itself writes the digits, so the two
+/// writers cannot differ.
 fn push_float(out: &mut String, f: f64, obj: &Bound<'_, PyAny>) -> PyResult<()> {
     use std::fmt::Write;
     reserve(out, 33)?;
@@ -795,7 +837,7 @@ fn push_float(out: &mut String, f: f64, obj: &Bound<'_, PyAny>) -> PyResult<()> 
         .ok()
         .and_then(|e| e.parse().ok())
         .unwrap_or(0);
-    if n >= 15 && (f * 262_144.0).fract() == 0.0 {
+    if n >= 15 && maybe_tie(f, n) {
         return push_float_repr(out, obj);
     }
     let digits = std::str::from_utf8(&digits[..n]).unwrap_or("0");
@@ -1126,7 +1168,7 @@ impl<'py> Writer<'py> {
             Class::Float(f, obj) => push_float(out, *f, obj)?,
             Class::Str(v) => {
                 let s = v.to_str().map_err(|_| lone_surrogate())?;
-                push_string(out, s, flow, cpad)?;
+                push_string(v.py(), out, s, flow, cpad)?;
             }
             Class::Bytes(b) => push_binary(out, b.as_bytes(), cpad)?,
             Class::Coll(_) => unreachable!("a collection is not a scalar"),
@@ -1194,11 +1236,9 @@ impl<'py> Writer<'py> {
             if d.is_empty() {
                 return Ok(None);
             }
-            if self.gil {
-                Src::Dict(d.iter(), d.clone(), 0, d.len())
-            } else {
-                Src::Pairs(d.call_method0(intern!(d.py(), "items"))?.try_iter()?)
-            }
+            // The iterator and the size it is checked against are taken together.
+            let (it, size) = with_critical_section(d.as_any(), || (d.iter(), d.len()));
+            Src::Dict(it, d.clone(), 0, size)
         } else if let Ok(l) = o.cast_exact::<PyList>() {
             if l.is_empty() {
                 return Ok(None);
