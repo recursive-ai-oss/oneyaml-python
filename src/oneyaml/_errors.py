@@ -6,7 +6,7 @@ Every failure on a YAML input is a :class:`YAMLError`, a ``ValueError`` subclass
 
 from __future__ import annotations
 
-__all__ = ["LimitError", "ParseError", "YAMLError"]
+__all__ = ["LimitError", "ParseError", "PatchError", "YAMLError"]
 
 # Categories that mean "the text is not acceptable YAML" and "a resource limit was hit".
 _PARSE = frozenset({"syntax", "encoding", "duplicate-key", "unresolved-tag"})
@@ -55,6 +55,25 @@ class ParseError(YAMLError):
 
 class LimitError(YAMLError):
     """The input exceeds a configured limit (depth, size, alias expansion, digits)."""
+
+
+class PatchError(YAMLError):
+    """A patch or an edit could not be applied; the document is unchanged.
+
+    ``index`` is the position of the failing operation in the patch (None for a single edit);
+    ``category`` is ``patch-path``, ``patch-test``, ``patch-invalid``, ``refused-alias``,
+    ``refused-ambiguous`` or ``limit``."""
+
+    def __init__(self, message: str = "", *, index: int | None = None, **kw) -> None:
+        super().__init__(message, **kw)
+        self.index = index
+
+    def __reduce__(self):
+        return (_rebuild_patch, (self.message, self.index, self.category))
+
+
+def _rebuild_patch(message, index, category):
+    return PatchError(message, index=index, category=category)
 
 
 def _rebuild(cls, message, category, line, column, offset, events):

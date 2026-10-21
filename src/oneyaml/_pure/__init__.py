@@ -6,9 +6,10 @@ from .._errors import YAMLError
 from ._construct import load
 from ._decode import decode
 from ._events import render
+from ._handle import parse
 from ._parser import DEFAULT_MAX_DEPTH, parse_events
 
-__all__ = ["BACKEND", "ENGINE_VERSION", "events_text", "load", "probe"]
+__all__ = ["BACKEND", "ENGINE_VERSION", "events_text", "load", "parse", "probe"]
 
 BACKEND = "pure"
 ENGINE_VERSION: str | None = None
