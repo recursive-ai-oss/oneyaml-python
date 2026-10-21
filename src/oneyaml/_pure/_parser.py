@@ -36,7 +36,7 @@ import re
 from bisect import bisect_right
 from collections.abc import Callable
 
-from .._errors import YAMLError
+from .._errors import YAMLError, make_error
 
 (
     STREAM_START,
@@ -120,7 +120,7 @@ def linecol(s: str, off: int) -> tuple[int, int]:
 
 def _fail(s: str, off: int, message: str, category: str = "syntax") -> YAMLError:
     line, col = linecol(s, off)
-    err = YAMLError(message, category, line, col)
+    err = make_error(message, category, line, col, off)
     err.offset = off  # type: ignore[attr-defined]
     return err
 
@@ -278,7 +278,8 @@ def _block_scalar(s: str, j: int, n: int, pi: int) -> tuple[int, str]:
     elif first <= pi:
         if s[lead_end + first] == "\t":
             raise _fail(s, lead_end + first, "a tab cannot indent a block scalar")
-        ci = pi + 1
+        # No content line: blank lines of any width are empty lines, not content.
+        ci = max(pi + 1, longest + 1)
     else:
         if longest > first:
             raise _fail(s, lead_end + first, "a leading blank line has too many spaces")
@@ -308,6 +309,11 @@ def _line_end(s: str, k: int) -> int:
 
 
 _BOM_LINE = re.compile(r"(?:---|\.\.\.)(?=[ \t\r\n]|$)|[ \t]*(?:#[^\r\n]*)?(?=[\r\n]|$)").match
+_BOM_BEFORE_MARKER = re.compile(
+    r"\ufeff[ \t]*(?:#[^\r\n]*)?(?:\r\n|\r|\n)"
+    r"(?:\ufeff?[ \t]*(?:#[^\r\n]*)?(?:\r\n|\r|\n))*"
+    r"\ufeff?(?:---|\.\.\.)(?=[ \t\r\n]|\Z)"
+).match
 _END_LINE = re.compile(r"\.\.\.(?:[ \t]+#[^\r\n]*|[ \t]*)$").match
 _PROPS_SEQ = re.compile(
     r"[&!][^ \t\r\n]*(?:[ \t]+[&!][^ \t\r\n]*)*[ \t]*(?:#[^\r\n]*)?"
@@ -342,13 +348,16 @@ def _quoted(s: str, j: int, n: int, fmin: int) -> tuple[int, str, bool]:
     raw = s[j + 1 : e - 1]
     multi = "\n" in raw or "\r" in raw
     if multi:
-        for mm in re.finditer(r"(?:\r\n|\r|\n)(---|\.\.\.)(?=[ \t\r\n]|$)", raw):
+        # The closing quote is part of its line: ``---"`` is no marker, and a quote at the
+        # margin is a line with content.
+        body = s[j + 1 : e]
+        for mm in re.finditer(r"(?:\r\n|\r|\n)(---|\.\.\.)(?=[ \t\r\n])", body):
             raise _fail(s, j + 1 + mm.start(1), "document marker inside a quoted scalar")
         if fmin > 0:
-            bad = re.search(rf"(?:\r\n|\r|\n)(?! {{{fmin}}})(?=[ \t]*[^ \t\r\n])", raw)
+            bad = re.search(rf"(?:\r\n|\r|\n)(?! {{{fmin}}})(?=[ \t]*[^ \t\r\n])", body)
             if bad:
                 p = bad.end()
-                while raw[p] in " \t":
+                while body[p] in " \t":
                     p += 1
                 raise _fail(s, j + 1 + p, "a continuation line is not indented enough")
     if q == "'":
@@ -822,8 +831,9 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
             m = skip(s, i)
             j = m.end()
             if m.lastindex:
-                col = len(m.group(1))
-                ls = m.end(1) - col
+                ls = m.end(1) - len(m.group(1))
+                # A tab before a marker or a directive keeps it off the margin.
+                col = j - ls
             else:
                 col = j - ls
             if j < n and s[j] == "\ufeff" and col == 0:
@@ -917,13 +927,18 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
                     raise eof()
                 break
             c = s[j]
-            if nl and col == 0:
+            if nl and col == 0 and not tab:
                 if c == "\ufeff":
                     if _marker_at(s, j + 1):
                         j += 1
                         c = s[j]
                     elif not need and not kinds and _BOM_LINE(s, j + 1):
                         i = _line_end(s, j)  # a comment line in the prefix of the next document
+                        continue
+                    elif not need and _BOM_BEFORE_MARKER(s, j):
+                        # The prefix of the next document may open with a mark even when the
+                        # document before it was never closed with a marker of its own.
+                        i = _line_end(s, j)
                         continue
                     else:
                         raise fail(j, "a byte order mark cannot appear here")
@@ -980,6 +995,8 @@ def _parse(s: str, ev: list[tuple], max_depth: int, truncated: bool) -> None:  #
                             col = len(m.group(1))
                             ls = m.end(1) - col
                             ctab = j > m.end(1)
+                            # The tab before the properties does not indent what follows.
+                            sep_tab = False
                             props_nl = True
                             if (
                                 j >= n

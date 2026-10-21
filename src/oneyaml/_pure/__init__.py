@@ -3,22 +3,12 @@
 from __future__ import annotations
 
 from .._errors import YAMLError
-from ._construct import check_expansion, load
+from ._construct import load
 from ._decode import decode
 from ._events import render
 from ._parser import DEFAULT_MAX_DEPTH, parse_events
-from ._types import FrozenMapping, Tagged
 
-__all__ = [
-    "BACKEND",
-    "ENGINE_VERSION",
-    "FrozenMapping",
-    "Tagged",
-    "check_expansion",
-    "events_text",
-    "load",
-    "probe",
-]
+__all__ = ["BACKEND", "ENGINE_VERSION", "events_text", "load", "probe"]
 
 BACKEND = "pure"
 ENGINE_VERSION: str | None = None
@@ -42,7 +32,6 @@ def events_text(data: bytes | str, max_depth: int = DEFAULT_MAX_DEPTH) -> list[s
         events = parse_events(text, max_depth)
     except YAMLError as exc:
         raw = exc.__dict__.pop("raw_events", None)
-        exc.__dict__.pop("offset", None)
         exc.events = render(raw) if raw is not None else []
         raise
     return render(events)

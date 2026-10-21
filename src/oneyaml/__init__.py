@@ -11,12 +11,32 @@ from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version
 from types import ModuleType
 
+from . import _api
+from ._api import load, load_all, loads, loads_all
+from ._errors import LimitError, ParseError, YAMLError
+from ._limits import Limits
+from ._types import FrozenMapping, Tagged
+
 try:
     __version__ = version("oneyaml")
 except PackageNotFoundError:  # running from a source tree that is not installed
     __version__ = "0+unknown"
 
-__all__ = ["__version__", "backend", "engine_version"]
+__all__ = [
+    "FrozenMapping",
+    "LimitError",
+    "Limits",
+    "ParseError",
+    "Tagged",
+    "YAMLError",
+    "__version__",
+    "backend",
+    "engine_version",
+    "load",
+    "load_all",
+    "loads",
+    "loads_all",
+]
 
 _CHOICES = ("auto", "native", "pure")
 
@@ -39,6 +59,7 @@ def _select() -> ModuleType:
 
 
 _impl = _select()
+_api._impl = _impl
 
 #: Name of the active backend: ``"native"`` or ``"pure"``.
 backend: str = _impl.BACKEND

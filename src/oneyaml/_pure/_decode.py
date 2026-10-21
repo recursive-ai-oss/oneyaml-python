@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .._errors import YAMLError
+from .._errors import make_error
 
 _BOMS = (
     (b"\xff\xfe\x00\x00", "utf-32-le"),
@@ -14,6 +14,7 @@ _BOMS = (
     (b"\xfe\xff", "utf-16-be"),
 )
 _BREAKS = re.compile(r"\r\n|\r|\n")
+_SURROGATE = re.compile("[\ud800-\udfff]").search
 
 
 def detect(data: bytes) -> tuple[str, int]:
@@ -38,6 +39,9 @@ def detect(data: bytes) -> tuple[str, int]:
 def decode(data: bytes | bytearray | memoryview | str) -> str:
     """Decode a stream; a byte order mark is removed. Malformed input raises ``encoding``."""
     if isinstance(data, str):
+        # A lone surrogate cannot be written as UTF-8, so the string is not text.
+        if not data.isascii() and _SURROGATE(data):
+            raise make_error("the string holds a lone surrogate, which is not text", "encoding")
         return data[1:] if data.startswith("\ufeff") else data
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError(f"YAML input must be bytes or str, not {type(data).__name__}")
@@ -54,4 +58,4 @@ def decode(data: bytes | bytearray | memoryview | str) -> str:
             column = len(_BREAKS.split(before)[-1]) + 1
         else:
             line, column = 1, len(before) + 1
-        raise YAMLError(f"invalid {codec} input: {exc.reason}", "encoding", line, column) from None
+        raise make_error(f"invalid {codec} input: {exc.reason}", "encoding", line, column) from None

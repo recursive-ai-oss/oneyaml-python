@@ -4,11 +4,12 @@ One pass over the event list with explicit stacks: no recursion follows the nest
 input, whatever its depth.
 
 Aliases share: an alias to a collection yields the very object the anchor made, so a document
-that expands exponentially when written out loads in time proportional to its size. A
-self-referential alias (``&a [*a]``) cannot occur here: an anchor is only usable once its node is
-complete, and the one event stream that would break that is refused as soon as the alias is met.
-Copies happen only for a collection used as a mapping key (it must be frozen to be hashable),
-and those are charged to the alias budget.
+that expands exponentially when written out loads in time proportional to its size. What the
+sharing hides is charged instead: each alias adds the nodes and bytes a copy would hold to a
+running total, and the load is refused when the total passes the alias budgets.
+
+A self-referential alias (``&a [*a]``) cannot be built: an anchor only names a node once the
+node is complete, and an alias met earlier is refused as soon as it is read.
 """
 
 from __future__ import annotations
@@ -17,7 +18,9 @@ import sys
 from itertools import islice
 from typing import Any
 
-from .._errors import YAMLError
+from .._errors import YAMLError, make_error
+from .._limits import _NONE
+from .._types import FrozenMapping, Tagged, freeze
 from ._decode import decode
 from ._parser import (
     ALIAS,
@@ -41,82 +44,101 @@ from ._resolve import (
     number,
     tagged_scalar,
 )
-from ._types import FrozenMapping, Tagged
 
 _OPEN = object()  # an anchor whose node is not finished yet
 _MISSING = object()
-_COLLECTIONS = (list, dict, Tagged)
-# A key is hashed and compared by the interpreter, which recurses in C on nested tuples; a key
-# this deep is never real data and would risk the interpreter's own stack.
+# How deep collections may nest inside one mapping key. Keys are hashed and compared by the
+# interpreter, which recurses in C once per level; real keys are a few levels at most. Fixed:
+# it does not follow ``Limits``, and the native backend uses the same number.
 KEY_DEPTH = 200
-_EXPANDS = "a collection used as a mapping key expands past the alias limit"
+_COLLECTIONS = (list, tuple, dict, FrozenMapping, Tagged)
+_UNFROZEN = (list, dict, Tagged)
 
 
 def load(data: Any, limits: Any, multi: bool) -> Any:
     """The value of the single document in ``data`` (``multi=False``) or a list of every
-    document (``multi=True``). ``limits`` carries the attributes ``depth``, ``alias_nodes``,
-    ``alias_bytes``, ``input_bytes``, ``scalar_bytes``, ``documents`` and ``int_digits``, each an
-    int or ``None`` for unlimited."""
-    cap_input = limits.input_bytes
+    document (``multi=True``). ``limits`` is a ``Limits``."""
+    depth, nf, nfloor, bf, bfloor, input_size, scalar_size, documents, digits = limits._native
     binary = isinstance(data, (bytes, bytearray, memoryview))
-    if cap_input is not None and binary and len(data) > cap_input:
-        raise YAMLError(f"the input is over the limit of {cap_input} bytes", "limit")
+    if input_size < _NONE and binary and len(data) > input_size:
+        raise make_error(f"the input is over the limit of {input_size} bytes", "limit")
     text = decode(data)
-    if cap_input is not None and not binary:
-        size = len(text.encode("utf-8", "surrogatepass"))
-        if size > cap_input:
-            raise YAMLError(f"the input is over the limit of {cap_input} bytes", "limit")
-    depth = limits.depth
+    if input_size < _NONE and not binary and _utf8_len(text) > input_size:
+        raise make_error(f"the input is over the limit of {input_size} bytes", "limit")
+    args = (
+        multi,
+        None if digits >= _NONE else digits,
+        None if depth >= _NONE else depth,
+        (nf, nfloor, bf, bfloor),
+    )
     try:
-        events = parse_events(text, sys.maxsize if depth is None else depth)
-    except YAMLError as exc:
-        exc.__dict__.pop("raw_events", None)
-        exc.__dict__.pop("offset", None)
-        raise
-    try:
-        _check_sizes(events, limits)
-        docs = _build(text, events, limits, multi)
+        try:
+            events = parse_events(text, sys.maxsize if depth >= _NONE else depth)
+        except YAMLError as exc:
+            # The event list the parser kept is not part of the error. It is read once more
+            # because a reader that builds as it goes meets a duplicate key or an alias bomb
+            # that comes before the syntax error first.
+            raw = exc.__dict__.pop("raw_events", None)
+            if raw:
+                _build(text, raw, *args, partial=True)
+            raise
+        if scalar_size < _NONE or documents < _NONE:
+            _check_sizes(events, scalar_size, documents)
+        docs = _build(text, events, *args)
     except Fail as exc:
         off = exc.offset
         line, col = linecol(text, 0 if off is None else off)
-        raise YAMLError(exc.message, exc.category, line, col) from None
+        raise make_error(exc.message, exc.category, line, col, off) from None
     if multi:
         return docs
     return docs[0] if docs else None
 
 
-def _check_sizes(events: list[tuple], limits: Any) -> None:
-    """The limits that need only a look at the events (most inputs set none of them)."""
-    ceil = limits.scalar_bytes
-    if ceil is not None:
+def _check_sizes(events: list[tuple], scalar_size: int, documents: int) -> None:
+    """The limits that need only a look at the events (most callers set neither)."""
+    if scalar_size < _NONE:
         for e in events:
             if e[0] == SCALAR:
                 v = e[7]
-                if len(v) > ceil or (len(v) * 4 > ceil and _utf8_len(v) > ceil):
-                    raise Fail(f"a scalar is over the limit of {ceil} bytes", "limit", e[1])
-    ceil = limits.documents
-    if ceil is not None:
+                if len(v) > scalar_size or (
+                    len(v) * 4 > scalar_size and _utf8_len(v) > scalar_size
+                ):
+                    raise Fail(f"a scalar is over the limit of {scalar_size} bytes", "limit", e[1])
+    if documents < _NONE:
         count = 0
         for e in events:
             if e[0] == DOC_START:
                 count += 1
-                if count > ceil:
-                    raise Fail(f"the stream has more than {ceil} documents", "limit", e[1])
+                if count > documents:
+                    raise Fail(f"the stream has more than {documents} documents", "limit", e[1])
+
+
+def _byte_budget(text: str, start: int, end: int, factor: int, floor: int) -> int:
+    """The alias byte budget once the document has been read up to ``end``, in UTF-8 bytes."""
+    return max(factor * _utf8_len(text[start:end]), floor)
 
 
 def _utf8_len(v: str) -> int:
-    return len(v.encode("utf-8", "surrogatepass"))
+    return len(v) if v.isascii() else len(v.encode("utf-8", "surrogatepass"))
 
 
-def _build(text: str, events: list[tuple], limits: Any, multi: bool) -> list[Any]:  # noqa: C901
-    cap = limits.int_digits
+def _build(  # noqa: C901
+    text: str,
+    events: list[tuple],
+    multi: bool,
+    cap: int | None,
+    depth: int | None,
+    budget: tuple[int, int, int, int],
+    partial: bool = False,
+) -> list[Any]:
+    nf, nfloor, bf, bfloor = budget
     wide: dict[int, float] = {}
-    # Freezing state: finished copies by id (the originals are kept alive here so ids stay
-    # unique), and what is left of the alias budget.
-    st: list[Any] = [{}, limits.alias_nodes, limits.alias_bytes]
     keys_seen: dict[str, str] = {}
     intern_key = keys_seen.setdefault
     anchors: dict[str, Any] = {}
+    # Collections that have been measured: id -> (nodes, bytes, height, the object itself). The
+    # object is kept so its id cannot be reused while the entry exists.
+    info: dict[int, tuple[int, int, int, Any]] = {}
     docs: list[Any] = []
     stack: list[tuple[list, tuple]] = []
     push = stack.append
@@ -127,9 +149,14 @@ def _build(text: str, events: list[tuple], limits: Any, multi: bool) -> list[Any
     number_start = NUMBER_START
     word_start = WORD_START
     missing = _MISSING
+    # Where the document began (event index and offset), the collections closed since, and what
+    # aliases have been charged so far.
+    doc_i = doc_start = closed = 0
+    charged_nodes = charged_bytes = 0
+    ascii_text = text.isascii()
     e: tuple = ()
     try:
-        for e in events:
+        for i, e in enumerate(events):
             k = e[0]
             if k == SCALAR:
                 v = e[7]
@@ -148,10 +175,11 @@ def _build(text: str, events: list[tuple], limits: Any, multi: bool) -> list[Any
                 if a is not None:
                     anchors[a] = v
             elif k == MAP_END or k == SEQ_END:  # noqa: SIM109 (hot loop)
+                closed += 1
                 buf = cur
                 cur, e0 = pop()
                 add = cur.append
-                v = _map(buf, e0, e, events, st, wide, intern_key, text) if k == MAP_END else buf
+                v = _map(buf, e0, e, events, info, wide, intern_key) if k == MAP_END else buf
                 tag = e0[4]
                 if tag is not None:
                     v = _tag_collection(tag, v, k == MAP_END, e0)
@@ -161,6 +189,7 @@ def _build(text: str, events: list[tuple], limits: Any, multi: bool) -> list[Any
                 # (a redefinition) already took the name over.
                 if a is not None and anchors[a] is _OPEN:
                     anchors[a] = v
+                    _measure(v, info)
             elif k == MAP_START or k == SEQ_START:  # noqa: SIM109 (hot loop)
                 push((cur, e))
                 cur = []
@@ -174,19 +203,46 @@ def _build(text: str, events: list[tuple], limits: Any, multi: bool) -> list[Any
                     raise Fail(f"the alias {e[3]} refers to a node that contains it", "syntax")
                 if v is missing:
                     raise Fail(f"the alias {e[3]} has no anchor", "syntax")
+                ent = info.get(id(v))
+                if ent is None:
+                    nodes, size, height = 1, _bytes(v), 0
+                else:
+                    nodes, size, height = ent[0], ent[1], ent[2]
+                # The shared object nests as deep as the anchored one, wherever it is used.
+                if depth is not None and len(stack) + height > depth:
+                    raise Fail(f"the alias nests deeper than the limit of {depth}", "limit")
+                # What a copy would hold: loading is cheap because of the sharing, but whoever
+                # walks the result (a dump, a comparison) pays for the expansion.
+                charged_nodes += nodes
+                charged_bytes += size
+                if charged_nodes > max(nf * (i - doc_i - closed), nfloor):
+                    raise Fail("alias expansion exceeds the node limit", "limit")
+                if charged_bytes > max(bf * (e[1] - doc_start), bfloor) and (
+                    ascii_text
+                    or charged_bytes > max(bf * _utf8_len(text[doc_start : e[1]]), bfloor)
+                ):
+                    raise Fail("alias expansion exceeds the byte limit", "limit")
                 add(v)
             elif k == DOC_START:
                 if docs and not multi:
                     raise Fail(
-                        "the input holds more than one document; use loads_all to read them",
-                        "other",
-                        e[1],
+                        "the stream holds more than one document; use loads_all", "other", e[1]
                     )
                 anchors = {}
+                info = {}
+                wide.clear()
                 cur = []
                 add = cur.append
+                doc_i, doc_start, closed = i, e[1], 0
+                charged_nodes = charged_bytes = 0
             elif k == DOC_END:
                 docs.append(cur[0] if cur else None)
+        while partial and stack:
+            # The input broke off inside collections: check what they hold so far.
+            buf = cur
+            cur, e0 = pop()
+            if e0[0] == MAP_START:
+                _map(buf[: len(buf) // 2 * 2], e0, e0, events, info, wide, intern_key)
     except Fail as exc:
         if exc.offset is None:
             exc.offset = _offset(e)
@@ -195,7 +251,76 @@ def _build(text: str, events: list[tuple], limits: Any, multi: bool) -> list[Any
 
 
 def _offset(e: tuple) -> int:
+    """Where a node's own text starts (after its tag and anchor)."""
+    if e[0] == SCALAR:
+        return e[2]
     return e[1] if len(e) > 1 and isinstance(e[1], int) else 0
+
+
+def _bytes(x: Any) -> int:
+    """The bytes of text a scalar value stands for (what a copy of it would hold)."""
+    t = type(x)
+    if t is str:
+        return len(x) if x.isascii() else len(x.encode("utf-8", "surrogatepass"))
+    if t is bytes:
+        return len(x)
+    if t is int:
+        # Past 64 bits the loader keeps the text; estimate its length in decimal digits.
+        return 0 if -(1 << 63) <= x < (1 << 63) else x.bit_length() * 30103 // 100000 + 1
+    if t is Tagged:
+        return _bytes(x.value)
+    return 0
+
+
+def _measure(root: Any, info: dict[int, tuple[int, int, int, Any]]) -> tuple[int, int, int, Any]:
+    """Nodes, bytes of text and height of ``root`` as a copy would hold them.
+
+    Shared parts count each time they are used, but are measured once (``info`` remembers every
+    collection it has seen), and the walk keeps its own stack, so a bomb costs its document's
+    size and depth is no limit."""
+    ent = info.get(id(root))
+    if ent is not None:
+        return ent
+    work = [root]
+    while work:
+        obj = work[-1]
+        if id(obj) in info:
+            work.pop()
+            continue
+        t = type(obj)
+        if t is list or t is tuple:
+            kids: Any = obj
+        elif t is dict:
+            kids = [*obj, *obj.values()]
+        elif t is FrozenMapping:
+            kids = [*obj._items, *obj._items.values()]
+        else:  # Tagged: the tag is no node of its own
+            kids = (obj.value,)
+        waiting = [c for c in kids if type(c) in _COLLECTIONS and id(c) not in info]
+        if waiting:
+            work.extend(waiting)
+            continue
+        work.pop()
+        if t is Tagged:
+            c = obj.value
+            sub = info.get(id(c)) if type(c) in _COLLECTIONS else None
+            info[id(obj)] = (1, _bytes(c), 0, obj) if sub is None else (*sub[:3], obj)
+            continue
+        nodes = 1
+        size = 0
+        height = 0
+        for c in kids:
+            sub = info.get(id(c)) if type(c) in _COLLECTIONS else None
+            if sub is None:
+                nodes += 1
+                size += _bytes(c)
+            else:
+                nodes += sub[0]
+                size += sub[1]
+                if sub[2] > height:
+                    height = sub[2]
+        info[id(obj)] = (nodes, size, height + 1, obj)
+    return info[id(root)]
 
 
 def _tag_collection(tag: str, v: Any, is_map: bool, e0: tuple) -> Any:
@@ -206,15 +331,14 @@ def _tag_collection(tag: str, v: Any, is_map: bool, e0: tuple) -> Any:
     if want is not None:
         if want == (1 if is_map else 0):
             return v
-        raise Fail(
-            f"the tag {tag} does not fit a {'mapping' if is_map else 'sequence'}", "syntax", e0[1]
-        )
+        kind = "mapping" if is_map else "sequence"
+        raise Fail(f"the tag {tag} does not fit a {kind}", "syntax", e0[2])
     if tag in _WRONG_COLLECTION:
-        raise Fail(f"the tag {tag} cannot be put on a collection", "syntax", e0[1])
+        raise Fail(f"the tag {tag} cannot be put on a collection", "syntax", e0[2])
     return Tagged(tag, v)
 
 
-def _map(buf, e0, e_end, events, st, wide, intern_key, text):
+def _map(buf, e0, e_end, events, info, wide, intern_key):
     """The dict of a mapping from its alternating keys and values."""
     ks = buf[0::2]
     vs = buf[1::2]
@@ -229,43 +353,62 @@ def _map(buf, e0, e_end, events, st, wide, intern_key, text):
                 return d
     except TypeError:
         pass  # an unhashable key: a collection, frozen below
-    return _map_slow(ks, vs, e0, events, st, wide)
+    except RecursionError:
+        raise _too_deep(events, e0, 0) from None
+    return _map_slow(ks, vs, e0, events, info, wide)
 
 
-def _map_slow(ks, vs, e0, events, st, wide):
-    """Mapping with keys that need care: collections to freeze, and equal-looking keys."""
+def _too_deep(events, e0, index: int) -> Fail:
+    return Fail(
+        "a mapping key is nested too deeply to compare",
+        "limit",
+        _key_offset(events, e0, index),
+    )
+
+
+def _map_slow(ks, vs, e0, events, info, wide):
+    """A mapping with keys that need care: collections to freeze, and equal-looking keys."""
     for i, k in enumerate(ks):
         t = type(k)
-        if t is list or t is dict or t is Tagged:
-            ks[i] = _freeze(k, st, (events, e0, i))
+        if t is list or t is dict or (t is Tagged and k._hash is None):
+            # Aliases were charged when they were read, so the copy is not charged again.
+            if _measure(k, info)[2] > KEY_DEPTH:
+                raise Fail(
+                    f"a mapping key nests deeper than {KEY_DEPTH} levels",
+                    "limit",
+                    _key_offset(events, e0, i),
+                )
+            ks[i] = freeze(k, sys.maxsize, sys.maxsize)[0]
         elif t is float and id(k) in wide:
-            raise _key_fail(
+            raise Fail(
                 "a float key is outside the range of a double and cannot be told apart "
                 "from its neighbours there",
                 "limit",
-                events,
-                e0,
-                i,
+                _key_offset(events, e0, i),
             )
     d: dict[Any, Any] = {}
     for i, k in enumerate(ks):
-        if k in d:
-            prev = next(p for p in d if p is k or p == k)
+        try:
+            seen = k in d
+            if seen:
+                prev = next(p for p in d if p is k or p == k)
+        except RecursionError:
+            raise _too_deep(events, e0, i) from None
+        if seen:
+            where = _key_offset(events, e0, i)
             if type(prev) is type(k):
-                raise _key_fail("the mapping has a duplicate key", "duplicate-key", events, e0, i)
-            raise _key_fail(
-                f"the keys {prev!r} and {k!r} differ in YAML but are one key in a Python dict",
-                "limit",
-                events,
-                e0,
-                i,
+                raise Fail("the mapping has a duplicate key", "duplicate-key", where)
+            raise Fail(
+                "two keys are different in YAML but equal in Python (1, 1.0 and true), "
+                "so they cannot share a dict",
+                "other",
+                where,
             )
-        d[k] = vs[i]
+        try:
+            d[k] = vs[i]
+        except RecursionError:
+            raise _too_deep(events, e0, i) from None
     return d
-
-
-def _key_fail(message: str, category: str, events, e0, i: int) -> Fail:
-    return Fail(message, category, _key_offset(events, e0, i))
 
 
 def _key_offset(events: list[tuple], e0: tuple, index: int) -> int:
@@ -289,138 +432,3 @@ def _key_offset(events: list[tuple], e0: tuple, index: int) -> int:
         if kind in (MAP_START, SEQ_START):
             depth += 1
     return e0[1]
-
-
-def _scalar_size(x: Any) -> int:
-    return len(x) if type(x) is str or type(x) is bytes else 8
-
-
-def _freeze(root: Any, st: list[Any], where: tuple) -> Any:
-    """A hashable copy of a collection (``list`` to ``tuple``, ``dict`` to ``FrozenMapping``).
-
-    Shared parts are copied once, but the cost charged is what writing the key out in full would
-    take (nodes, and bytes of text): hashing and comparing a key walk it in full. An explicit
-    stack keeps depth from becoming recursion."""
-    memo = st[0]
-    stack = [root]
-    while stack:
-        obj = stack[-1]
-        if id(obj) in memo:
-            stack.pop()
-            continue
-        t = type(obj)
-        if t is list:
-            kids = obj
-        elif t is dict:
-            kids = list(obj.values())
-        else:
-            kids = [obj.value]
-        waiting = [c for c in kids if type(c) in _COLLECTIONS and id(c) not in memo]
-        if waiting:
-            stack.extend(waiting)
-            continue
-        stack.pop()
-        nodes = 1
-        size = 0
-        depth = 0
-        if t is dict:
-            items = []
-            for key, c in obj.items():
-                for part in (key, c):
-                    ent = memo.get(id(part))
-                    if ent is not None:
-                        _, f, n, b, d = ent
-                    else:
-                        f, n, b, d = part, 1, _scalar_size(part), 0
-                    nodes += n
-                    size += b
-                    depth = max(depth, d)
-                    items.append(f)
-            frozen: Any = FrozenMapping._wrap(dict(zip(items[0::2], items[1::2], strict=True)))
-        else:
-            items = []
-            for c in kids:
-                ent = memo.get(id(c))
-                if ent is not None:
-                    _, f, n, b, d = ent
-                else:
-                    f, n, b, d = c, 1, _scalar_size(c), 0
-                nodes += n
-                size += b
-                depth = max(depth, d)
-                items.append(f)
-            frozen = tuple(items) if t is list else Tagged(obj.tag, items[0])
-        depth += 1
-        if depth > KEY_DEPTH:
-            raise Fail(
-                f"a mapping key nests deeper than {KEY_DEPTH} levels", "limit", _key_offset(*where)
-            )
-        left = st[1]
-        if left is not None and nodes > left:
-            raise Fail(_EXPANDS, "limit", _key_offset(*where))
-        left = st[2]
-        if left is not None and size > left:
-            raise Fail(_EXPANDS, "limit", _key_offset(*where))
-        memo[id(obj)] = (obj, frozen, nodes, size, depth)
-        memo[id(frozen)] = (frozen, frozen, nodes, size, depth)
-    _, frozen, nodes, size, _ = memo[id(root)]
-    # A shared copy is charged on every use, so the check is on what is left.
-    if st[1] is not None:
-        st[1] -= nodes
-    if st[2] is not None:
-        st[2] -= size
-    if (st[1] is not None and st[1] < 0) or (st[2] is not None and st[2] < 0):
-        raise Fail(_EXPANDS, "limit", _key_offset(*where))
-    return frozen
-
-
-def check_expansion(root: Any, max_nodes: int | None, max_bytes: int | None) -> tuple[int, int]:
-    """The nodes and bytes of ``root`` written out in full, shared parts counted each time.
-
-    Raises a ``limit`` error as soon as a part passes ``max_nodes`` or ``max_bytes``, without
-    expanding anything: sizes are worked out once per shared object. Whatever walks a loaded value
-    in full (dumping, converting, comparing) calls this first."""
-    done: dict[int, tuple[Any, int, int]] = {}
-    stack = [root]
-    while stack:
-        obj = stack[-1]
-        if id(obj) in done:
-            stack.pop()
-            continue
-        t = type(obj)
-        if t is list or t is tuple:
-            kids: Any = obj
-        elif t is dict or t is FrozenMapping:
-            kids = [x for kv in obj.items() for x in kv]
-        elif t is Tagged:
-            kids = (obj.value,)
-        else:
-            stack.pop()
-            continue
-        waiting = [c for c in kids if type(c) in _WALKED and id(c) not in done]
-        if waiting:
-            stack.extend(waiting)
-            continue
-        stack.pop()
-        nodes = 1
-        size = 0
-        for c in kids:
-            ent = done.get(id(c)) if type(c) in _WALKED else None
-            if ent is None:
-                nodes += 1
-                size += _scalar_size(c)
-            else:
-                nodes += ent[1]
-                size += ent[2]
-        if (max_nodes is not None and nodes > max_nodes) or (
-            max_bytes is not None and size > max_bytes
-        ):
-            raise YAMLError("the value expands past the alias limit when written out", "limit")
-        done[id(obj)] = (obj, nodes, size)
-    ent = done.get(id(root))
-    if ent is None:
-        return 1, _scalar_size(root)
-    return ent[1], ent[2]
-
-
-_WALKED = (list, tuple, dict, FrozenMapping, Tagged)

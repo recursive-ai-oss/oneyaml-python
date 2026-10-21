@@ -7,7 +7,7 @@ import binascii
 import re
 from typing import Any
 
-from ._types import Tagged
+from .._types import Tagged, big_int
 
 NAN = float("nan")  # one object, so a dict finds a repeated ``.nan`` key
 INF = float("inf")
@@ -45,16 +45,6 @@ WORD_START = frozenset("tTfFnN~")
 
 # CPython refuses ``int(str)`` beyond this many digits; longer numbers are read in pieces.
 _PY_DIGITS = 4300
-_PIECE = 4000
-
-
-def _decimal(digits: str) -> int:
-    """A decimal integer of any length, converted in pieces so CPython's own cap never applies."""
-    acc = 0
-    for i in range(0, len(digits), _PIECE):
-        piece = digits[i : i + _PIECE]
-        acc = acc * 10 ** len(piece) + int(piece)
-    return acc
 
 
 def _too_long(n: int, cap: int) -> Fail:
@@ -73,13 +63,14 @@ def number(v: str, cap: int | None, wide: dict[int, float]) -> Any:
     if g == 1:
         s = m[1]
         if len(s) <= (_PY_DIGITS if cap is None or cap > _PY_DIGITS else cap):
-            return int(s)
+            try:
+                return int(s)
+            except ValueError:  # the interpreter's own cap was set lower than ours
+                return big_int(s)
         n = len(s) - (s[0] in "+-")
         if cap is not None and n > cap:
             raise _too_long(n, cap)
-        if n <= _PY_DIGITS:
-            return int(s)
-        return -_decimal(s[1:]) if s[0] == "-" else _decimal(s.lstrip("+"))
+        return big_int(s)
     if g == 2 or g == 3:
         s = m[g]
         if cap is not None and len(s) > cap:
