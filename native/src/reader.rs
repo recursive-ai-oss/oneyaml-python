@@ -18,6 +18,7 @@ use crate::classes;
 use crate::errors::{Fail, panic_message, to_pyerr};
 use crate::hook;
 use crate::input::with_text;
+use crate::keyhash::SeededState;
 use crate::limits::Lim;
 use crate::ops::{self, Conv, Mode, Op, Prop};
 
@@ -26,6 +27,13 @@ use crate::ops::{self, Conv, Mode, Op, Prop};
 const KEY_CACHE_MAX_LEN: usize = 128;
 /// Entries the key cache may hold per load.
 const KEY_CACHE_MAX_ENTRIES: usize = 1 << 16;
+/// Key lookups between looks at whether the cache is paying for itself.
+const KEY_CACHE_WINDOW: usize = 1024;
+/// While the cache is off, this many keys at the start of every `KEY_CACHE_OFF_PERIOD` keys are
+/// looked up anyway, to notice when keys begin to repeat. A short period keeps the keys of the
+/// rows that follow a run of distinct keys from being built over and over.
+const KEY_CACHE_PROBE: usize = 32;
+const KEY_CACHE_OFF_PERIOD: usize = 256;
 /// From this many bytes of input the engine runs on a second thread while objects are built.
 /// Below it, starting a thread costs more than it saves.
 pub(crate) const PIPELINE_MIN: usize = 128 * 1024;
@@ -122,7 +130,16 @@ pub struct Builder<'py, 's> {
     min_read: usize,
     /// Builds set aside while an outside anchor is built where it is first needed.
     detached: Vec<(Vec<Frame<'py, 's>>, Option<Bound<'py, PyAny>>, usize)>,
-    keys: HashMap<&'s str, Bound<'py, PyString>>,
+    keys: HashMap<&'s str, Bound<'py, PyString>, SeededState>,
+    /// Keys seen so far, and the lookups and hits of the current stretch. A run of keys that are
+    /// all different (a wide map of ids, say) gains nothing from the cache and would pay a hash
+    /// and an insert for every key, so a window with few hits turns the cache off. While it is
+    /// off, a short probe at the start of every window looks keys up again, and the cache comes
+    /// back on as soon as keys repeat (the rows after such a map, say).
+    key_calls: usize,
+    key_lookups: usize,
+    key_hits: usize,
+    keys_off: bool,
     nan: Option<Bound<'py, PyAny>>,
     /// Nodes of the current document so far, and what aliases have been charged.
     nodes: usize,
@@ -234,7 +251,11 @@ impl<'py, 's> Builder<'py, 's> {
             min_nodes: 0,
             min_read: 0,
             detached: Vec::new(),
-            keys: HashMap::new(),
+            keys: HashMap::with_hasher(SeededState::new()),
+            key_calls: 0,
+            key_lookups: 0,
+            key_hits: 0,
+            keys_off: false,
             nan: None,
             nodes: 0,
             charged_nodes: 0,
@@ -517,16 +538,44 @@ impl<'py, 's> Builder<'py, 's> {
             if s.len() > KEY_CACHE_MAX_LEN {
                 return PyString::new(self.py, s).into_any();
             }
-            if let Some(o) = self.keys.get(s) {
-                return o.clone().into_any();
-            }
+            return self.cached_key(s).into_any();
+        }
+        PyString::new(self.py, &text).into_any()
+    }
+
+    fn cached_key(&mut self, s: &'s str) -> Bound<'py, PyString> {
+        let pos = self.key_calls;
+        self.key_calls = pos.wrapping_add(1);
+        if self.keys_off && pos % KEY_CACHE_OFF_PERIOD >= KEY_CACHE_PROBE {
+            return PyString::new(self.py, s);
+        }
+        self.key_lookups += 1;
+        let o = if let Some(o) = self.keys.get(s) {
+            self.key_hits += 1;
+            o.clone()
+        } else {
             let o = PyString::new(self.py, s);
             if self.keys.len() < KEY_CACHE_MAX_ENTRIES {
                 self.keys.insert(s, o.clone());
             }
-            return o.into_any();
+            o
+        };
+        let end = if self.keys_off {
+            self.key_lookups == KEY_CACHE_PROBE
+        } else {
+            self.key_lookups == KEY_CACHE_WINDOW
+        };
+        if end {
+            // Fewer than one key in eight seen before: not worth keeping.
+            let worth = self.key_hits * 8 >= self.key_lookups;
+            if !worth {
+                self.keys = HashMap::with_hasher(SeededState::new());
+            }
+            self.keys_off = !worth;
+            self.key_lookups = 0;
+            self.key_hits = 0;
         }
-        PyString::new(self.py, &text).into_any()
+        o
     }
 
     /// An integer from decimal text (base 10, sign included) or from radix digits.
@@ -1042,7 +1091,7 @@ pub fn load<'py>(
     multi: bool,
     mode: Mode,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let lim = Lim::from_py(limits)?;
+    let lim = Lim::of(limits)?;
     with_text(py, data, lim.input, |text| {
         let settings = lim.settings();
         let mut builder = Builder::new(py, lim, multi, mode);

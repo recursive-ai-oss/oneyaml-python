@@ -638,6 +638,11 @@ class Serializer:
         self.anchor_node(node)
         try:
             _pyemit.Walk(self._writer, self, self.anchors).run(node)
+        except BaseException:
+            # The half-written document is useless, and after running out of memory the caller
+            # needs the room back (the traceback keeps this buffer alive) to report the error.
+            self._writer.out.clear()
+            raise
         finally:
             self.anchors = {}
             self.serialized_nodes = {}

@@ -82,6 +82,9 @@ def _select() -> _ModuleType:
 
 _impl = _select()
 _api._impl = _impl
+if _impl.BACKEND == "native":
+    # A load with the default limits then skips reading them out of the object.
+    _impl._use_default_limits(_api._DEFAULT_LIMITS)
 del annotations  # the name that `from __future__ import annotations` leaves behind
 
 #: Name of the active backend: ``"native"`` or ``"pure"``.

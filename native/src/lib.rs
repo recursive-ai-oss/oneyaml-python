@@ -14,6 +14,7 @@ mod events;
 mod hook;
 mod hybrid;
 mod input;
+mod keyhash;
 mod limits;
 mod ops;
 mod pydump;
@@ -60,6 +61,13 @@ fn load<'py>(
         }
     };
     guarded(py, || reader::load(py, data, limits, multi, mode))
+}
+
+/// Tell the loader which `Limits` object holds the defaults, so that a load with it need not
+/// read its fields. False when the object does not hold the defaults this build knows.
+#[pyfunction]
+fn _use_default_limits(limits: &Bound<'_, PyAny>) -> PyResult<bool> {
+    limits::Lim::register_default(limits)
 }
 
 /// Write Python objects as YAML text, one document each. `opts` is
@@ -173,6 +181,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ENGINE_VERSION", env!("ONEYAML_ENGINE_VERSION"))?;
     m.add_function(wrap_pyfunction!(probe, m)?)?;
     m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(_use_default_limits, m)?)?;
     m.add_function(wrap_pyfunction!(dump, m)?)?;
     m.add_function(wrap_pyfunction!(pyyaml_body, m)?)?;
     m.add_function(wrap_pyfunction!(_dump_path_ops, m)?)?;

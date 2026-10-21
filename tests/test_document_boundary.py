@@ -286,6 +286,7 @@ def lookups_for_one_check(depth, monkeypatch):
     return CountingDict.gets
 
 
+@pytest.mark.slow
 def test_a_staleness_check_walks_the_path_once(api, monkeypatch):
     small = lookups_for_one_check(1000, monkeypatch)
     large = lookups_for_one_check(4000, monkeypatch)

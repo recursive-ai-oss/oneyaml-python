@@ -339,6 +339,7 @@ def test_a_view_through_an_alias_is_stale_when_the_alias_becomes_a_scalar(api):
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="needs an address-space limit")
+@pytest.mark.slow
 def test_an_endless_sequence_is_a_memory_error_not_an_abort(api):
     oneyaml.parse("a: 1\n")  # a backend without documents stops here
     code = (

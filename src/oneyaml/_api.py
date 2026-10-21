@@ -124,6 +124,15 @@ def loads(
         TypeError: ``data`` is neither text nor bytes, ``limits`` is not a ``Limits``, or an
             option has the wrong type.
     """
+    # The common call, straight to the backend: one function call less per load.
+    if (
+        limits is None
+        and not merge_keys
+        and parse_float is None
+        and tags is None
+        and (type(data) is str or type(data) is bytes)
+    ):
+        return _impl.load(data, _DEFAULT_LIMITS, False)
     return _call(data, limits, False, merge_keys, parse_float, tags)
 
 
@@ -137,6 +146,14 @@ def loads_all(
 ) -> list[Any]:
     """Read every document in ``data``; an empty stream gives an empty list. The options are
     those of :func:`loads`."""
+    if (
+        limits is None
+        and not merge_keys
+        and parse_float is None
+        and tags is None
+        and (type(data) is str or type(data) is bytes)
+    ):
+        return _impl.load(data, _DEFAULT_LIMITS, True)
     return _call(data, limits, True, merge_keys, parse_float, tags)
 
 

@@ -414,6 +414,7 @@ def test_deep_and_large_inputs_do_not_recurse(api):
     assert got is not None
 
 
+@pytest.mark.slow
 def test_large_input_reads_the_same(api):
     # Big enough for the native backend to read on several threads.
     rows = []

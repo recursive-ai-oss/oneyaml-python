@@ -839,6 +839,7 @@ def test_a_list_that_shrinks_while_it_is_written_ends_there(api):
     assert text.startswith("- 0\n- !shrunk 'x'\n")
 
 
+@pytest.mark.slow
 def test_signals_that_change_values_during_a_dump_give_text_or_runtime_error(api):
     import signal
 
@@ -867,6 +868,7 @@ def test_signals_that_change_values_during_a_dump_give_text_or_runtime_error(api
         signal.signal(signal.SIGALRM, old)
 
 
+@pytest.mark.slow
 def test_threads_that_change_values_during_a_dump_give_text_or_runtime_error(api):
     import threading
 
@@ -926,6 +928,7 @@ except MemoryError:
 """
 
 
+@pytest.mark.slow
 def test_running_out_of_memory_is_a_memory_error_not_an_abort(api):
     import os
     import subprocess
