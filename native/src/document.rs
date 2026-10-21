@@ -36,7 +36,6 @@ use crate::limits::Lim;
 use crate::ops::{self, Op, Tag};
 use crate::pyvalue;
 use crate::reader::{Builder, R};
-use crate::scalar::{self, Plain};
 
 /// How deep a collection used as a mapping key may nest (as in a load).
 const KEY_DEPTH: usize = 200;
@@ -135,7 +134,6 @@ enum Miss {
     Index(String, usize),
     NotCollection(String),
     ThroughAlias,
-    Ambiguous(String),
     NoRoot,
 }
 
@@ -157,13 +155,6 @@ impl Miss {
                 None,
                 None,
             ),
-            Miss::Ambiguous(k) => raise(
-                py,
-                &format!("more than one key reads as {k}"),
-                "refused-ambiguous",
-                None,
-                None,
-            ),
         }
     }
 }
@@ -180,27 +171,8 @@ fn find_entry<'d>(map: NodeRef<'d>, tok: &Tok) -> Result<Option<Entry<'d>>, Miss
             if let Some(v) = m.get(s.as_str()) {
                 return Ok(Some((Value::String(s.clone()), v)));
             }
-            // A key that is not a string (`1`, `true`, `~`) is named by its text too.
-            if matches!(scalar::classify(s), Plain::Str) {
-                return Ok(None);
-            }
-            let want = oneyaml::from_str::<Value>(s).ok();
-            let mut hit: Option<Entry<'d>> = None;
-            for (k, v) in m.iter() {
-                let Some(sc) = k.as_scalar() else { continue };
-                let same = sc.value() == s.as_str()
-                    || want
-                        .as_ref()
-                        .is_some_and(|w| sc.resolved().is_ok_and(|r| &r == w));
-                if same {
-                    if hit.is_some() {
-                        return Err(Miss::Ambiguous(s.clone()));
-                    }
-                    let key = sc.resolved().unwrap_or_else(|_| Value::String(s.clone()));
-                    hit = Some((key, v));
-                }
-            }
-            Ok(hit)
+            // A view token is exact, as a dict key is: `"1"` does not name the key `1`.
+            Ok(None)
         }
         other => {
             let key = other.key_value();

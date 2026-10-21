@@ -11,6 +11,10 @@ static MAKE_PATCH_ERROR: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static TAGGED: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static FROZEN_MAPPING: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static FREEZE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static INT_TEXT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static TAGGED_TAG: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static TAGGED_VALUE: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
+static FROZEN_ITEMS: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static CONSTRUCT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static REJECT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 static SEXAGESIMAL: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
@@ -50,6 +54,39 @@ pub fn freeze<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
 
 pub fn big_int<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
     lookup(py, &BIG_INT, "oneyaml._types", "big_int")
+}
+
+pub fn int_text<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
+    lookup(py, &INT_TEXT, "oneyaml._types", "int_text")
+}
+
+/// `Tagged.tag.__get__` (0) or `Tagged.value.__get__` (1): reads the stored slot of a value
+/// whose real type is a `Tagged`, whatever a subclass does with attribute lookup.
+pub fn tagged_slot<'py>(py: Python<'py>, which: u8) -> PyResult<&'py Bound<'py, PyAny>> {
+    let (cell, name) = if which == 0 {
+        (&TAGGED_TAG, "tag")
+    } else {
+        (&TAGGED_VALUE, "value")
+    };
+    slot_getter(py, cell, "Tagged", name)
+}
+
+/// `FrozenMapping._items.__get__`: the dict behind a frozen mapping.
+pub fn frozen_items<'py>(py: Python<'py>) -> PyResult<&'py Bound<'py, PyAny>> {
+    slot_getter(py, &FROZEN_ITEMS, "FrozenMapping", "_items")
+}
+
+fn slot_getter<'py>(
+    py: Python<'py>,
+    cell: &'static PyOnceLock<Py<PyAny>>,
+    class: &str,
+    name: &str,
+) -> PyResult<&'py Bound<'py, PyAny>> {
+    let obj = cell.get_or_try_init(py, || {
+        let cls = py.import("oneyaml._types")?.getattr(class)?;
+        PyResult::Ok(cls.getattr(name)?.getattr("__get__")?.unbind())
+    })?;
+    Ok(obj.bind(py))
 }
 
 /// The function that builds the values of the YAML 1.1 mode's tags.

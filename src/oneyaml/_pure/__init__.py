@@ -3,19 +3,24 @@
 from __future__ import annotations
 
 from .._errors import YAMLError
+from . import _emit
 from ._construct import build as build_parsed
 from ._construct import load
 from ._construct import parse as parse_stream
 from ._decode import decode
+from ._emit import dump
 from ._events import render
+from ._handle import parse
 from ._parser import DEFAULT_MAX_DEPTH, parse_events
 
 __all__ = [
     "BACKEND",
     "ENGINE_VERSION",
     "build_parsed",
+    "dump",
     "events_text",
     "load",
+    "parse",
     "parse_stream",
     "probe",
 ]
@@ -45,3 +50,11 @@ def events_text(data: bytes | str, max_depth: int = DEFAULT_MAX_DEPTH) -> list[s
         exc.events = render(raw) if raw is not None else []
         raise
     return render(events)
+
+
+def _dump_path_ops(reset: bool) -> int:
+    """Operations on the dump's on-path set since the last reset (a test reads it)."""
+    n = _emit.PATH_OPS
+    if reset:
+        _emit.PATH_OPS = 0
+    return n

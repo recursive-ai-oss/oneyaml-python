@@ -35,11 +35,12 @@ def test_tokens_are_text_or_exact_scalar_keys(native):
         h.value(0, 5)
 
 
-def test_a_text_token_finds_a_key_that_is_not_a_string(native):
+def test_a_text_token_names_only_a_string_key(native):
     h = native.parse("1: a\n0x10: b\n~: c\n", Limits())
-    assert h.value(0, ["1"]) == "a" and h.value(0, ["16"]) == "b" and h.value(0, ["null"]) == "c"
-    with pytest.raises(KeyError):
-        h.value(0, ["2"])
+    for tok in ("1", "16", "null"):
+        with pytest.raises(KeyError):
+            h.value(0, [tok])
+    assert h.value(0, [1]) == "a" and h.value(0, [None]) == "c"
 
 
 def test_version_moves_when_nodes_move(native):

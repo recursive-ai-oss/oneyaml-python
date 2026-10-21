@@ -435,11 +435,6 @@ def test_a_subclass_is_read_by_its_base_value(api):
     assert oneyaml.loads(str(doc)) == {"a": {"n": "right", "i": 7}}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="the engine's insert does not copy the siblings' quoting yet"
-    " (kit case edit/add-key-double-quoted-siblings)",
-)
 def test_a_string_added_next_to_double_quoted_values_is_double_quoted(api):
     quoted = oneyaml.parse('a: "x"\nb: "y"\n')
     quoted["c"] = "z"
@@ -809,6 +804,15 @@ def test_readers_and_writers_share_a_document(api):
     assert not errors and doc["counter"] == 99
 
 
+def test_view_access_is_by_exact_key_value(api):
+    doc = oneyaml.parse('80: a\n"90": b\n0x10: c\n~: d\n')
+    assert doc[80] == "a" and doc["90"] == "b" and doc[16] == "c" and doc[None] == "d"
+    for key in ("80", 90, "16", "null", "~"):
+        with pytest.raises(KeyError):
+            doc[key]
+        assert key not in doc
+
+
 def test_collection_keys_are_addressed_by_value(api):
     doc = oneyaml.parse("? [1, 2]\n: seq\n? {a: 1}\n: map\nplain: 3\n")
     keys = list(doc)
@@ -819,7 +823,11 @@ def test_collection_keys_are_addressed_by_value(api):
     assert doc.to_python() == {(1, 2): "changed", keys[1]: "map", "plain": 3}
     # The engine does not remove an entry whose key is a collection; the document is left as it was.
     before = str(doc)
-    with pytest.raises(YAMLError):
+    if api.name == "native":
+        with pytest.raises(YAMLError):
+            del doc[keys[1]]
+        assert str(doc) == before
+        assert oneyaml.loads(before)[(1, 2)] == "changed"
+    else:
         del doc[keys[1]]
-    assert str(doc) == before
-    assert oneyaml.loads(before)[(1, 2)] == "changed"
+        assert oneyaml.loads(str(doc)) == {(1, 2): "changed", "plain": 3}

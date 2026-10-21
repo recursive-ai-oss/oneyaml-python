@@ -228,3 +228,11 @@ def big_int(text: str) -> int:
     for chunk in chunks:
         result = result * base + int(chunk)
     return sign * result
+
+
+def int_text(value: int) -> str:
+    """Decimal text of an integer with more digits than ``str`` converts under the interpreter's
+    cap on integer-string conversion (the cap does not apply to ``Decimal``)."""
+    from decimal import Decimal
+
+    return str(Decimal(value))
