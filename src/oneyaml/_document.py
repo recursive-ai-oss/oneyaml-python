@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import sys
+import threading
 from collections.abc import Iterator, MutableMapping, MutableSequence, Sequence
 from typing import IO, Any, NamedTuple
 
@@ -44,9 +45,10 @@ class Position(NamedTuple):
     column: int
 
 
-# Entries kept in a document's edit log before views older than the log are all treated as
-# stale. An entry is a tuple; this is far more edits than any view outlives.
-_LOG_MAX = 100_000
+# Shifts of one sequence kept apart before they are folded into a single stamp, and paths
+# remembered before the books are cleared (views older than that count as stale).
+_SHIFTS_KEPT = 64
+_BOOKS_MAX = 100_000
 
 
 def _norm(token: Any) -> str:
@@ -61,39 +63,70 @@ def _norm(token: Any) -> str:
 
 
 class _Core:
-    """What every view of one stream shares: the backend handle and the log of edits."""
+    """What every view of one stream shares: the backend handle and what edits did to paths.
 
-    __slots__ = ("base", "h", "log")
+    An edit that removes or replaces the node at a path stamps that path in ``dead``; one that
+    moves the items of a sequence from an index on stamps the sequence in ``shifts``. A view
+    asks only about the prefixes of its own path, so a check costs the depth of the view and
+    never the number of edits made since the view was taken.
+    """
+
+    __slots__ = ("dead", "floor", "floors", "h", "lock", "shifts", "tick")
 
     def __init__(self, handle: Any) -> None:
         self.h = handle
-        self.log: list[tuple[tuple[str, ...], int | None]] = []
-        self.base = 0
-
-    @property
-    def tick(self) -> int:
-        return self.base + len(self.log)
+        # Held across "is this view still good?" + the backend call + the note of an edit, so
+        # that another thread's insert cannot slip in between and move the item under a view.
+        self.lock = threading.RLock()
+        self.tick = 0
+        self.dead: dict[tuple[str, ...], int] = {}
+        self.shifts: dict[tuple[str, ...], list[tuple[int, int]]] = {}
+        # Sequences shifted so often that the individual shifts were folded into one stamp:
+        # every item view of them older than the stamp counts as moved.
+        self.floors: dict[tuple[str, ...], int] = {}
+        # Views older than this are all treated as stale (the books were cleared).
+        self.floor = 0
 
     def record(self, d: int, path: tuple, index: int | None = None) -> None:
         """Note an edit: the node at ``path`` is gone (``index`` None), or the items of the
         sequence at ``path`` from ``index`` on moved."""
-        self.log.append(((str(d), *map(_norm, path)), index))
-        if len(self.log) > _LOG_MAX:
-            self.base += len(self.log)
-            self.log.clear()
+        self.tick += 1
+        key = (str(d), *map(_norm, path))
+        if index is None:
+            self.dead[key] = self.tick
+        else:
+            moves = self.shifts.setdefault(key, [])
+            moves.append((self.tick, index))
+            if len(moves) > _SHIFTS_KEPT:
+                self.floors[key] = self.tick
+                moves.clear()
+        if len(self.dead) + len(self.shifts) + len(self.floors) > _BOOKS_MAX:
+            self.dead.clear()
+            self.shifts.clear()
+            self.floors.clear()
+            self.floor = self.tick
 
     def stale(self, d: int, path: tuple, tick: int) -> bool:
-        if tick < self.base:
+        if tick < self.floor:
             return True
-        mine = (str(d), *map(_norm, path))
-        for where, index in self.log[tick - self.base :]:
-            n = len(where)
-            if mine[:n] != where:
-                continue
-            if index is None:
+        dead, shifts, floors = self.dead, self.shifts, self.floors
+        key: tuple[str, ...] = (str(d),)
+        last = len(path)
+        for i in range(last + 1):
+            if dead.get(key, 0) > tick:
                 return True
-            if len(mine) > n and mine[n].isdigit() and int(mine[n]) >= index:
-                return True
+            if i == last:
+                return False
+            step = _norm(path[i])
+            moves = shifts.get(key)
+            if moves is not None or floors.get(key, 0) > tick:
+                if floors.get(key, 0) > tick:
+                    return True
+                if moves and step.isdigit():
+                    at = int(step)
+                    if any(t > tick and index <= at for t, index in moves):
+                        return True
+            key = (*key, step)
         return False
 
 
@@ -101,7 +134,7 @@ def _token(key: Any) -> Any:
     """The path token for a mapping key: text as it is, other scalars as themselves."""
     if isinstance(key, (str, int, float, tuple, FrozenMapping)) or key is None:
         return key
-    raise KeyError(key)
+    raise TypeError(f"{type(key).__name__} cannot be a YAML mapping key here")
 
 
 class _Node:
@@ -168,33 +201,37 @@ class _Node:
             if self._kind() != "sequence":
                 raise TypeError("only a sequence can be sliced")
             return [self[i] for i in range(*key.indices(len(self)))]
-        _, path = self._keyed(key)
-        return self._view(path)
+        with self._core.lock:
+            _, path = self._keyed(key)
+            return self._view(path)
 
     def __setitem__(self, key: Any, value: Any) -> None:
         if isinstance(key, slice):
             raise TypeError("slice assignment is not supported")
-        _, path = self._keyed(key)
-        h = self._h()
         if isinstance(value, _Node):
             value = value.to_python()
-        before = h.version()
-        h.set(self._d, list(path), value)
-        if h.version() != before:
-            self._core.record(self._d, path)
+        with self._core.lock:
+            _, path = self._keyed(key)
+            h = self._h()
+            before = h.version()
+            h.set(self._d, list(path), value)
+            if h.version() != before:
+                self._core.record(self._d, path)
 
     def __delitem__(self, key: Any) -> None:
         if isinstance(key, slice):
             raise TypeError("slice deletion is not supported")
-        kind, path = self._keyed(key)
-        h = self._h()
-        h.remove(self._d, list(path))
-        if kind == "sequence":
-            self._core.record(self._d, self._path, int(path[-1]))
-        self._core.record(self._d, path)
+        with self._core.lock:
+            kind, path = self._keyed(key)
+            h = self._h()
+            h.remove(self._d, list(path))
+            if kind == "sequence":
+                self._core.record(self._d, self._path, int(path[-1]))
+            self._core.record(self._d, path)
 
     def __len__(self) -> int:
-        return self._length(self._h())
+        with self._core.lock:
+            return self._length(self._h())
 
     def __iter__(self) -> Iterator[Any]:
         h = self._h()
@@ -210,10 +247,7 @@ class _Node:
         kind = self._kind()
         h = self._h()
         if kind == "mapping":
-            try:
-                path = (*self._path, _token(key))
-            except KeyError:
-                return False
+            path = (*self._path, _token(key))
             try:
                 h.kind(self._d, list(path))
             except (KeyError, IndexError):
@@ -239,10 +273,12 @@ class _Node:
 
     def to_python(self) -> Any:
         """The node as plain Python data, as ``loads`` would read it."""
-        return self._h().value(self._d, list(self._path))
+        with self._core.lock:
+            return self._h().value(self._d, list(self._path))
 
     def _info(self) -> tuple:
-        return self._h().info(self._d, list(self._path))
+        with self._core.lock:
+            return self._h().info(self._d, list(self._path))
 
     @property
     def style(self) -> str:
@@ -282,6 +318,24 @@ class MappingView(_Node, MutableMapping):
     def _kind(self) -> str:
         return "mapping"
 
+    def clear(self) -> None:
+        # The keys are read once; each entry is then removed by name.
+        with self._core.lock:
+            for key in self._h().keys(self._d, list(self._path)):
+                del self[key]
+
+    def popitem(self) -> tuple[Any, Any]:
+        with self._core.lock:
+            keys = self._h().keys(self._d, list(self._path))
+            if not keys:
+                raise KeyError("popitem(): mapping is empty")
+            key = keys[-1]
+            value = self[key]
+            if isinstance(value, _Node):
+                value = value.to_python()
+            del self[key]
+            return key, value
+
     def __eq__(self, other: Any) -> Any:
         return _Node.__eq__(self, other)
 
@@ -295,26 +349,34 @@ class SequenceView(_Node, MutableSequence):
     def _kind(self) -> str:
         return "sequence"
 
+    def clear(self) -> None:
+        with self._core.lock:
+            for i in reversed(range(self._length(self._h()))):
+                del self[i]
+
     def __eq__(self, other: Any) -> Any:
         return _Node.__eq__(self, other)
 
     def insert(self, index: int, value: Any) -> None:
-        h = self._h()
-        if index < 0:
-            index = max(0, index + self._length(h))
-        index = min(index, sys.maxsize)
         if isinstance(value, _Node):
             value = value.to_python()
-        h.insert(self._d, list(self._path), index, value)
-        # The items from `index` on moved, unless this went past the end (views cannot be there).
-        self._core.record(self._d, self._path, index)
+        with self._core.lock:
+            h = self._h()
+            if index < 0:
+                index = max(0, index + self._length(h))
+            index = min(index, sys.maxsize)
+            h.insert(self._d, list(self._path), index, value)
+            # The items from `index` on moved, unless this went past the end (views cannot be
+            # there).
+            self._core.record(self._d, self._path, index)
 
     def append(self, value: Any) -> None:
         # One call into the backend: the length is not read first, so two threads appending
         # never choose the same place.
         if isinstance(value, _Node):
             value = value.to_python()
-        self._h().insert(self._d, list(self._path), sys.maxsize, value)
+        with self._core.lock:
+            self._h().insert(self._d, list(self._path), sys.maxsize, value)
 
 
 _MAPPING_API = frozenset(
@@ -429,7 +491,8 @@ class Document(_Node):
             raise IndexError("document index out of range")
         if not steps:
             return node if node._kind() != "scalar" else node.to_python()
-        return node._view(tuple(steps))
+        with self._core.lock:
+            return node._view(tuple(steps))
 
     def __repr__(self) -> str:
         return f"<Document {self.to_python()!r}>"

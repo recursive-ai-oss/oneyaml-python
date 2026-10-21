@@ -91,7 +91,19 @@ pub struct Builder<'py, 's> {
     /// began before the alias, so a node is registered when it begins and filled in when it
     /// ends; an alias to an unfilled slot refers to a node that contains it.
     slots: Vec<Option<Anchored<'py>>>,
-    anchors: HashMap<&'s str, usize>,
+    /// Anchor names, with the scope they are read in: always 0 for a load; a walk over a lossless
+    /// document gives every anchored node a scope of its own, so that an alias finds its target by
+    /// identity and never by a name another anchor shares.
+    anchors: HashMap<(&'s str, u32), usize>,
+    scope: u32,
+    /// An alias that shares an object already built, and is not charged (see `share`).
+    free_alias: bool,
+    /// Floors for the own-node and bytes-read figures the alias budgets are sized from: a view
+    /// reads part of a document, but its aliases are judged as the whole read would judge them.
+    min_nodes: usize,
+    min_read: usize,
+    /// Builds set aside while an outside anchor is built where it is first needed.
+    detached: Vec<(Vec<Frame<'py, 's>>, Option<Bound<'py, PyAny>>, usize)>,
     keys: HashMap<&'s str, Bound<'py, PyString>>,
     nan: Option<Bound<'py, PyAny>>,
     /// Nodes of the current document so far, and what aliases have been charged.
@@ -111,10 +123,53 @@ pub type R<T> = Result<T, Fail>;
 impl<'py, 's> Builder<'py, 's> {
     /// A builder for objects made from a walk over a lossless document (see `document`), whose
     /// positions are byte offsets into the stream and whose own document begins at `doc_start`.
-    pub fn for_walk(py: Python<'py>, lim: Lim, doc_start: usize) -> Self {
+    pub fn for_walk(
+        py: Python<'py>,
+        lim: Lim,
+        doc_start: usize,
+        doc_nodes: usize,
+        doc_bytes: usize,
+    ) -> Self {
         let mut b = Self::new(py, lim, false);
         b.doc_start = doc_start;
+        b.min_nodes = doc_nodes;
+        b.min_read = doc_bytes;
         b
+    }
+
+    /// The node count the alias budgets are sized from, when it was only worked out late.
+    pub fn set_min_nodes(&mut self, nodes: usize) {
+        self.min_nodes = nodes;
+    }
+
+    /// The scope anchors are registered and found in (see `anchors`).
+    pub fn set_scope(&mut self, scope: u32) {
+        self.scope = scope;
+    }
+
+    /// Whether the next alias shares an object without being charged for it.
+    pub fn set_free(&mut self, free: bool) {
+        self.free_alias = free;
+    }
+
+    /// Set the build in progress aside, to build something else whose result stays registered
+    /// under its anchor and is shared afterwards.
+    pub fn detach(&mut self) {
+        let saved = (
+            std::mem::take(&mut self.stack),
+            self.root.take(),
+            std::mem::take(&mut self.key_depth),
+        );
+        self.detached.push(saved);
+    }
+
+    /// Resume the build set aside by the last `detach`.
+    pub fn reattach(&mut self) {
+        if let Some((stack, root, key_depth)) = self.detached.pop() {
+            self.stack = stack;
+            self.root = root;
+            self.key_depth = key_depth;
+        }
     }
 
     /// Feed one op of the walk.
@@ -137,6 +192,11 @@ impl<'py, 's> Builder<'py, 's> {
             docs: Vec::new(),
             slots: Vec::new(),
             anchors: HashMap::new(),
+            scope: 0,
+            free_alias: false,
+            min_nodes: 0,
+            min_read: 0,
+            detached: Vec::new(),
             keys: HashMap::new(),
             nan: None,
             nodes: 0,
@@ -208,7 +268,7 @@ impl<'py, 's> Builder<'py, 's> {
                     obj = classes::tagged(self.py)?.call1((tag.as_ref(), obj))?;
                 }
                 if let Some(name) = anchor {
-                    self.anchors.insert(name, self.slots.len());
+                    self.anchors.insert((name, self.scope), self.slots.len());
                     self.slots.push(Some(Anchored {
                         obj: obj.clone(),
                         height: 0,
@@ -338,7 +398,7 @@ impl<'py, 's> Builder<'py, 's> {
             Body::Seq(PyList::empty(py))
         };
         let slot = anchor.map(|name| {
-            self.anchors.insert(name, self.slots.len());
+            self.anchors.insert((name, self.scope), self.slots.len());
             self.slots.push(None);
             self.slots.len() - 1
         });
@@ -393,7 +453,7 @@ impl<'py, 's> Builder<'py, 's> {
 
     fn alias(&mut self, name: &'s str, at: usize) -> R<()> {
         self.nodes += 1;
-        let Some(&index) = self.anchors.get(name) else {
+        let Some(&index) = self.anchors.get(&(name, self.scope)) else {
             return Err(Fail::new(
                 "syntax",
                 format!("alias *{name} has no anchor"),
@@ -421,10 +481,12 @@ impl<'py, 's> Builder<'py, 's> {
         let hashable = a.hashable;
         // Charge what a copy would hold. Sharing makes loading cheap, but whoever walks the
         // result (a dump, a comparison, `json.dumps`) pays for the expansion.
-        self.charged_nodes = self.charged_nodes.saturating_add(nodes);
-        self.charged_bytes = self.charged_bytes.saturating_add(bytes);
-        let read = at.saturating_sub(self.doc_start);
-        if self.charged_nodes > self.lim.node_budget(self.nodes) {
+        if !self.free_alias {
+            self.charged_nodes = self.charged_nodes.saturating_add(nodes);
+            self.charged_bytes = self.charged_bytes.saturating_add(bytes);
+        }
+        let read = at.saturating_sub(self.doc_start).max(self.min_read);
+        if self.charged_nodes > self.lim.node_budget(self.nodes.max(self.min_nodes)) {
             return Err(Fail::new(
                 "limit",
                 "alias expansion exceeds the node limit",

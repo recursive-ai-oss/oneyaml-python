@@ -96,7 +96,7 @@ fn binary(bytes: &[u8]) -> Value {
     }))
 }
 
-fn big_int(text: &str) -> Result<Value, Fail> {
+pub fn big_int(text: &str) -> Result<Value, Fail> {
     oneyaml::from_str::<Value>(text).map_err(|e| Fail::Yaml {
         category: "limit",
         message: format!("integer cannot be written: {e}"),
@@ -104,8 +104,31 @@ fn big_int(text: &str) -> Result<Value, Fail> {
     })
 }
 
+fn yaml_fail(category: &'static str, message: impl Into<String>) -> Fail {
+    Fail::Yaml {
+        category,
+        message: message.into(),
+        at: None,
+    }
+}
+
+/// The decimal digits of an `int`, read through `int` itself: a subclass's own `__repr__`,
+/// `__str__` or `__format__` is never asked, since its answer would be parsed as YAML.
+pub fn int_text(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    let py = obj.py();
+    let text: String = py
+        .get_type::<pyo3::types::PyInt>()
+        .call_method1("__repr__", (obj,))?
+        .extract()?;
+    let digits = text.strip_prefix('-').unwrap_or(&text);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(PyTypeError::new_err("an integer has no decimal digits"));
+    }
+    Ok(text)
+}
+
 /// A scalar, or the frame to build a collection with.
-fn step<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> Result<Step<'py>, Fail> {
+fn step<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>, digits: usize) -> Result<Step<'py>, Fail> {
     if obj.is_none() {
         return Ok(Step::Leaf(Value::Null));
     }
@@ -113,15 +136,38 @@ fn step<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> Result<Step<'py>, Fail
         return Ok(Step::Leaf(Value::Bool(b.is_true())));
     }
     if obj.is_instance_of::<PyInt>() {
-        if let Ok(i) = obj.extract::<i64>() {
+        if obj.is_exact_instance_of::<PyInt>()
+            && let Ok(i) = obj.extract::<i64>()
+        {
             return Ok(Step::Leaf(Value::from(i)));
         }
-        if let Ok(u) = obj.extract::<u64>() {
-            return Ok(Step::Leaf(Value::from(u)));
+        // Wider than 64 bits (or a subclass): written from its decimal digits, within the cap.
+        let bits: u64 = obj.call_method0("bit_length")?.extract()?;
+        if bits as f64 * std::f64::consts::LOG10_2 > digits as f64 + 1.0 {
+            return Err(yaml_fail(
+                "limit",
+                format!("an integer of more than {digits} digits cannot be written"),
+            ));
         }
-        let text = obj
-            .call_method1("__format__", ("d",))?
-            .extract::<String>()?;
+        let text = match int_text(obj) {
+            Ok(t) => t,
+            Err(e) if e.is_instance_of::<PyValueError>(py) => {
+                return Err(yaml_fail(
+                    "limit",
+                    "the integer has too many digits to write",
+                ));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if let Ok(i) = text.parse::<i64>() {
+            return Ok(Step::Leaf(Value::from(i)));
+        }
+        if text.trim_start_matches('-').len() > digits {
+            return Err(yaml_fail(
+                "limit",
+                format!("an integer of more than {digits} digits cannot be written"),
+            ));
+        }
         return Ok(Step::Leaf(big_int(&text)?));
     }
     if let Ok(f) = obj.cast::<PyFloat>() {
@@ -130,10 +176,10 @@ fn step<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> Result<Step<'py>, Fail
     if let Ok(s) = obj.cast::<PyString>() {
         return match s.to_str() {
             Ok(t) => Ok(Step::Leaf(Value::String(t.to_string()))),
-            Err(_) => Err(PyValueError::new_err(
+            Err(_) => Err(yaml_fail(
+                "encoding",
                 "the string holds a lone surrogate, which is not text",
-            )
-            .into()),
+            )),
         };
     }
     let id = obj.as_ptr() as usize;
@@ -150,11 +196,7 @@ fn step<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> Result<Step<'py>, Fail
             if obj.is_exact_instance_of::<PyDict>() {
                 d.items().iter().map(pair).collect::<PyResult<_>>()?
             } else {
-                let mut v = Vec::new();
-                for entry in obj.call_method0("items")?.try_iter()? {
-                    v.push(pair(entry?)?);
-                }
-                v
+                collect(obj.call_method0("items")?.try_iter()?, |e| pair(e))?
             };
         return Ok(open_map(entries, id));
     }
@@ -180,20 +222,34 @@ fn step<'py>(py: Python<'py>, obj: &Bound<'py, PyAny>) -> Result<Step<'py>, Fail
     // Any other mapping or sequence (a view of another document, say) reads as plain data.
     let abc = py.import("collections.abc")?;
     if obj.is_instance(&abc.getattr("Mapping")?)? {
-        let mut v = Vec::new();
-        for entry in obj.call_method0("items")?.try_iter()? {
-            v.push(pair(entry?)?);
-        }
+        let v = collect(obj.call_method0("items")?.try_iter()?, |e| pair(e))?;
         return Ok(open_map(v, id));
     }
     if obj.is_instance(&abc.getattr("Sequence")?)? {
-        let mut v = Vec::new();
-        for item in obj.try_iter()? {
-            v.push(item?);
-        }
+        let v = collect(obj.try_iter()?, Ok)?;
         return Ok(open_seq(v, id));
     }
     Err(not_yaml(obj).into())
+}
+
+/// Drain a user iterator into a vector. An iterator that never ends (a `Sequence` whose
+/// `__getitem__` never raises `IndexError`) runs out of memory: that is a `MemoryError`, not an
+/// abort, and Ctrl-C is honoured between items.
+fn collect<'py, T>(
+    iter: Bound<'py, pyo3::types::PyIterator>,
+    mut each: impl FnMut(Bound<'py, PyAny>) -> PyResult<T>,
+) -> PyResult<Vec<T>> {
+    let py = iter.py();
+    let mut v = Vec::new();
+    for item in iter {
+        if v.len() % 4096 == 0 {
+            py.check_signals()?;
+        }
+        v.try_reserve(1)
+            .map_err(|_| pyo3::exceptions::PyMemoryError::new_err("out of memory"))?;
+        v.push(each(item?)?);
+    }
+    Ok(v)
 }
 
 fn pair<'py>(entry: Bound<'py, PyAny>) -> PyResult<(Bound<'py, PyAny>, Bound<'py, PyAny>)> {
@@ -230,25 +286,30 @@ pub fn to_value<'py>(
     py: Python<'py>,
     obj: &Bound<'py, PyAny>,
     max_depth: usize,
+    digits: usize,
 ) -> Result<Value, Fail> {
     let mut stack: Vec<Frame<'py>> = Vec::new();
     let mut on_path: HashSet<usize> = HashSet::new();
+    let mut alive: Vec<Bound<'py, PyAny>> = Vec::new();
     // The objects of the frames on the path stay referenced by the caller's data; a container
     // that is dropped and reallocated while we run would need Python code, which we never run.
     let mut next: Option<Bound<'py, PyAny>> = Some(obj.clone());
     let mut done: Option<Value> = None;
     loop {
         if let Some(o) = next.take() {
-            match step(py, &o)? {
+            match step(py, &o, digits)? {
                 Step::Leaf(v) => done = Some(v),
                 Step::Open(frame, first) => {
+                    // Keep the container alive for the whole conversion: a freed one's address
+                    // could be handed to a new container, which would look like a cycle.
+                    alive.push(o.clone());
                     let id = match &frame {
                         Frame::Seq { id, .. }
                         | Frame::Map { id, .. }
                         | Frame::Tagged { id, .. } => *id,
                     };
                     if !on_path.insert(id) {
-                        return Err(PyValueError::new_err("circular reference").into());
+                        return Err(yaml_fail("other", "circular reference"));
                     }
                     if stack.len() >= max_depth {
                         return Err(Fail::Yaml {
@@ -278,7 +339,7 @@ pub fn to_value<'py>(
                         None => *key = Some(v),
                         Some(k) => {
                             if map.insert(k, v).is_some() {
-                                return Err(PyValueError::new_err("duplicate mapping key").into());
+                                return Err(yaml_fail("other", "duplicate mapping key"));
                             }
                         }
                     },
