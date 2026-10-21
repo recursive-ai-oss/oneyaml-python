@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/recursive-ai-oss/oneyaml-python/security/advisories/new
+    about: Report a vulnerability privately. Please do not open a public issue.

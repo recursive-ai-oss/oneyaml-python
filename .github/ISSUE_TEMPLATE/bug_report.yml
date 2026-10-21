@@ -1,0 +1,36 @@
+name: Bug report
+description: The library gave a wrong result, raised the wrong error, crashed or hung.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A crash, a hang, or memory use out of proportion to the input is a bug, and so is an edit that changes anything but the value you set, or a difference between the native and the pure backend. If you think the problem is a security vulnerability, report it privately instead (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Version and backend
+      description: 'The output of `python -c "import sys, oneyaml; print(oneyaml.__version__, oneyaml.backend, sys.version)"`, and your operating system.'
+    validations:
+      required: true
+  - type: textarea
+    id: input
+    attributes:
+      label: Input
+      description: The smallest YAML (and patch, if any) that shows the problem.
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: Code
+      description: The calls you made, as a runnable Python script if you can.
+      render: python
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual result
+      description: What you expected, and what happened instead (the output or the full traceback).
+    validations:
+      required: true

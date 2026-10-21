@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest a change to the API or behaviour.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what happens today? Show the YAML and the code if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+      description: How the API or behaviour could change. Alternatives you considered are welcome.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Reading and writing values
+        - Document editing
+        - Patches
+        - Limits
+        - PyYAML compat
+        - ruamel.yaml compat
+        - Backends and installation
+        - Documentation
