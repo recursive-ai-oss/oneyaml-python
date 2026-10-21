@@ -33,6 +33,7 @@ can re-read with the same regular expressions.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from collections.abc import Callable
 
 from .._errors import YAMLError
@@ -60,7 +61,7 @@ def _always(pattern: str) -> _Always:
     return re.compile(pattern).match  # type: ignore[return-value]
 
 
-_CMT = r"(?<![^ \t\r\n])#[^\r\n]*"
+_CMT = r"(?<![^ \t\r\n\ufeff])#[^\r\n]*"  # a byte order mark may precede a comment at a line start
 # White space, comments and line breaks. Group 1 is the indentation of the last line reached
 # (it takes part only when a line break was crossed).
 _SKIP = _always(rf"[ \t]*(?:{_CMT})?(?:(?:\r\n|\r|\n)( *)[ \t]*(?:{_CMT})?)*")
@@ -423,6 +424,8 @@ def parse_events(s: str, max_depth: int = DEFAULT_MAX_DEPTH) -> list[tuple]:
     Raises ``YAMLError``; the exception's ``raw_events`` holds the tuples read before the error
     (and its ``offset`` the index of the failing character)."""
     bad = _NONPRINTABLE.search(s)
+    if bad is not None and _QUOTED_ONLY(bad.group()):
+        return _parse_masked(s, max_depth)
     stop = bad.start() if bad else -1
     if "\ufeff" in s:
         stop = _first_stray_bom(s, stop)
@@ -441,6 +444,58 @@ def parse_events(s: str, max_depth: int = DEFAULT_MAX_DEPTH) -> list[tuple]:
         exc.raw_events = ev  # type: ignore[attr-defined]
         raise exc from None
     return ev
+
+
+# Characters only a quoted scalar may hold: it takes every character from U+0020 up (section 5.1),
+# where the rest of the stream takes printable ones.
+_QUOTED_ONLY_CHARS = "[\x7f-\x84\x86-\x9f\ufffe\uffff]"
+_QUOTED_ONLY = re.compile(_QUOTED_ONLY_CHARS).fullmatch
+_QUOTED_ONLY_ALL = re.compile(_QUOTED_ONLY_CHARS)
+
+
+def _parse_masked(s: str, max_depth: int) -> list[tuple]:
+    """Parse a stream that holds characters only quoted scalars may hold.
+
+    They are swapped for stand-ins the parser accepts anywhere, then checked: one outside a
+    quoted scalar is an error, and in the scalars they are put back. A stand-in is a character
+    the text does not contain, so nothing real is confused with one."""
+    found = sorted({m.group() for m in _QUOTED_ONLY_ALL.finditer(s)})
+    stand: dict[str, str] = {}
+    code = 0xF0000
+    for ch in found:
+        while chr(code) in s:
+            code += 1
+        stand[ch] = chr(code)
+        code += 1
+    masked = s.translate({ord(c): r for c, r in stand.items()})
+    back = {ord(r): c for c, r in stand.items()}
+    positions = [m.start() for m in _QUOTED_ONLY_ALL.finditer(s)]
+    try:
+        events = parse_events(masked, max_depth)
+        err = None
+    except YAMLError as exc:
+        err = exc
+        events = exc.__dict__.pop("raw_events", [])
+    # The first masked character outside every quoted scalar read so far.
+    spans = sorted((e[2], e[3]) for e in events if e[0] == SCALAR and e[6] in "'\"")
+    starts = [a for a, _ in spans]
+    limit = getattr(err, "offset", len(s)) if err is not None else len(s)
+    for p in positions:
+        if p >= limit:
+            break
+        k = bisect_right(starts, p) - 1
+        if k < 0 or p >= spans[k][1]:
+            raise _fail(s, p, "character not allowed in a YAML stream")
+    if err is not None:
+        err.raw_events = [_unmask(e, back) for e in events]  # type: ignore[attr-defined]
+        raise err
+    return [_unmask(e, back) for e in events]
+
+
+def _unmask(e: tuple, back: dict[int, str]) -> tuple:
+    if e[0] == SCALAR and e[6] in "'\"":
+        return (*e[:7], e[7].translate(back))
+    return e
 
 
 def _first_stray_bom(s: str, stop: int) -> int:

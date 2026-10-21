@@ -3,9 +3,22 @@
 from __future__ import annotations
 
 from .._errors import YAMLError
+from ._construct import check_expansion, load
 from ._decode import decode
 from ._events import render
 from ._parser import DEFAULT_MAX_DEPTH, parse_events
+from ._types import FrozenMapping, Tagged
+
+__all__ = [
+    "BACKEND",
+    "ENGINE_VERSION",
+    "FrozenMapping",
+    "Tagged",
+    "check_expansion",
+    "events_text",
+    "load",
+    "probe",
+]
 
 BACKEND = "pure"
 ENGINE_VERSION: str | None = None
