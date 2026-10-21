@@ -232,7 +232,7 @@ class Handle:
                     return was or coll
                 if isinstance(last, str) and not last.isascii() and _SURROGATE(last):
                     raise KeyError(last)
-                E.insert_member(doc, ploc, last, value)
+                E.insert_member(doc, ploc, last, value, False)
                 return False
             if doc.kind[pr] == K_SEQ:
                 loc = E.locate(doc, toks, True, False)

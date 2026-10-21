@@ -15,9 +15,6 @@
   "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
- "rt:own/diagnostics/c1-control-in-a-comment-is-an-error": {
-  "native": "ruamel rejects input that YAML 1.2 accepts"
- },
  "rt:own/diagnostics/closing-quote-at-the-margin-of-a-nested-scalar": {
   "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
@@ -26,20 +23,12 @@
   "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
- "rt:own/diagnostics/del-in-a-comment-is-an-error": {
-  "native": "ruamel rejects input that YAML 1.2 accepts"
- },
  "rt:own/diagnostics/empty-key-with-adjacent-flow-value-is-invalid": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
- "rt:own/diagnostics/explicit-key-with-adjacent-flow-value-is-invalid": {
-  "native": "ruamel rejects input that YAML 1.2 accepts"
- },
- "rt:own/diagnostics/plain-key-with-adjacent-flow-value-is-invalid": {
-  "native": "ruamel rejects input that YAML 1.2 accepts"
- },
  "rt:own/diagnostics/property-only-key-with-adjacent-flow-value-is-invalid": {
-  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
  "rt:own/diagnostics/second-bare-document-after-a-byte-order-mark-is-an-error": {
@@ -47,11 +36,24 @@
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
  "rt:own/diagnostics/verbatim-tag-of-a-lone-bang-is-invalid": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
  "rt:own/diagnostics/verbatim-tag-that-is-not-a-uri-is-invalid": {
-  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
+ },
+ "rt:own/edit/add-existing-key-with-a-local-tag-replaces-its-value": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/edit/add-item-after-a-keep-scalar-of-one-line-of-spaces-with-no-final-line-break": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/edit/add-key-after-a-block-scalar-ending-in-a-line-of-spaces-with-no-final-line-break": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
  },
  "rt:own/edit/keep-comment-after-value-spacing": {
   "native": "ruamel rejects input that YAML 1.2 accepts",
@@ -87,6 +89,22 @@
  "rt:own/edit/replace-custom-tagged-scalar-then-edit-neighbour": {
   "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
   "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/edit/replace-pointer-matches-a-key-with-a-local-tag-by-its-text": {
+  "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
+  "pure": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types"
+ },
+ "rt:own/edit/set-keep-scalar-of-a-line-of-spaces-with-no-final-line-break-to-an-integer": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/edit/set-literal-ending-in-a-line-of-spaces-with-no-final-line-break-to-an-integer": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "rt:own/edit/set-value-of-a-flow-key-with-an-empty-value": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
  },
  "rt:own/edit/test-error-str-tag-is-not-integer": {
   "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
@@ -129,6 +147,7 @@
   "pure": "ruamel rejects input that YAML 1.2 accepts"
  },
  "rt:own/parse/tab-only-line-after-block-scalar-at-end": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
   "pure": "ruamel rejects input that YAML 1.2 accepts"
  },
  "rt:own/parse/tag-handle-directive": {
@@ -146,6 +165,10 @@
  "rt:own/parse/top-level-literal-with-indentation-indicator": {
   "native": "ruamel reads a different value",
   "pure": "ruamel reads a different value"
+ },
+ "rt:own/parse/two-byte-order-marks-before-the-first-document": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
  "rt:own/parse/verbatim-tag-with-fragment": {
   "native": "rt reads a tagged node as oneyaml.Tagged; ruamel wraps it in its own types",
@@ -231,7 +254,7 @@
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
  "rt:own/schema/escaped-surrogate-pair-is-one-character": {
-  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "native": "ruamel reads a different value",
   "pure": "ruamel reads a different value"
  },
  "rt:own/schema/escaped-two-high-surrogates-are-refused": {
@@ -610,9 +633,6 @@
   "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
- "safe:own/diagnostics/c1-control-in-a-comment-is-an-error": {
-  "native": "ruamel rejects input that YAML 1.2 accepts"
- },
  "safe:own/diagnostics/closing-quote-at-the-margin-of-a-nested-scalar": {
   "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
@@ -621,31 +641,29 @@
   "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
- "safe:own/diagnostics/del-in-a-comment-is-an-error": {
-  "native": "ruamel rejects input that YAML 1.2 accepts"
- },
  "safe:own/diagnostics/empty-key-with-adjacent-flow-value-is-invalid": {
+  "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
- },
- "safe:own/diagnostics/explicit-key-with-adjacent-flow-value-is-invalid": {
-  "native": "ruamel rejects input that YAML 1.2 accepts"
- },
- "safe:own/diagnostics/plain-key-with-adjacent-flow-value-is-invalid": {
-  "native": "ruamel rejects input that YAML 1.2 accepts"
- },
- "safe:own/diagnostics/property-only-key-with-adjacent-flow-value-is-invalid": {
-  "native": "ruamel rejects input that YAML 1.2 accepts"
  },
  "safe:own/diagnostics/second-bare-document-after-a-byte-order-mark-is-an-error": {
   "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
  "safe:own/diagnostics/verbatim-tag-of-a-lone-bang-is-invalid": {
-  "native": "ruamel reads a different value",
+  "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
- "safe:own/diagnostics/verbatim-tag-that-is-not-a-uri-is-invalid": {
-  "native": "ruamel rejects input that YAML 1.2 accepts"
+ "safe:own/edit/add-existing-key-with-a-local-tag-replaces-its-value": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/edit/add-item-after-a-keep-scalar-of-one-line-of-spaces-with-no-final-line-break": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/edit/add-key-after-a-block-scalar-ending-in-a-line-of-spaces-with-no-final-line-break": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
  },
  "safe:own/edit/keep-comment-after-value-spacing": {
   "native": "ruamel rejects input that YAML 1.2 accepts",
@@ -679,6 +697,22 @@
   "native": "ruamel rejects input that YAML 1.2 accepts",
   "pure": "ruamel rejects input that YAML 1.2 accepts"
  },
+ "safe:own/edit/replace-pointer-matches-a-key-with-a-local-tag-by-its-text": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
+  "pure": "ruamel rejects input that YAML 1.2 accepts"
+ },
+ "safe:own/edit/set-keep-scalar-of-a-line-of-spaces-with-no-final-line-break-to-an-integer": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/edit/set-literal-ending-in-a-line-of-spaces-with-no-final-line-break-to-an-integer": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
+ "safe:own/edit/set-value-of-a-flow-key-with-an-empty-value": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel reads a different value"
+ },
  "safe:own/parse/alias-in-redefinition-after-earlier-anchor-is-recursive": {
   "native": "ruamel accepts input that YAML 1.2 forbids",
   "pure": "ruamel accepts input that YAML 1.2 forbids"
@@ -708,6 +742,7 @@
   "pure": "ruamel rejects input that YAML 1.2 accepts"
  },
  "safe:own/parse/tab-only-line-after-block-scalar-at-end": {
+  "native": "ruamel rejects input that YAML 1.2 accepts",
   "pure": "ruamel rejects input that YAML 1.2 accepts"
  },
  "safe:own/parse/tag-handle-directive": {
@@ -725,6 +760,10 @@
  "safe:own/parse/top-level-literal-with-indentation-indicator": {
   "native": "ruamel reads a different value",
   "pure": "ruamel reads a different value"
+ },
+ "safe:own/parse/two-byte-order-marks-before-the-first-document": {
+  "native": "ruamel reads a different value",
+  "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
  "safe:own/parse/verbatim-tag-with-fragment": {
   "native": "ruamel rejects input that YAML 1.2 accepts",
@@ -803,7 +842,7 @@
   "pure": "ruamel accepts input that YAML 1.2 forbids"
  },
  "safe:own/schema/escaped-surrogate-pair-is-one-character": {
-  "native": "ruamel accepts input that YAML 1.2 forbids",
+  "native": "ruamel reads a different value",
   "pure": "ruamel reads a different value"
  },
  "safe:own/schema/escaped-two-high-surrogates-are-refused": {

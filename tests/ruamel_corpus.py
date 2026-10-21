@@ -15,15 +15,23 @@ from typing import Any
 import oneyaml
 from oneyaml.compat.ruamel import YAML
 
+# Inputs on which ruamel's own loader does work that doubles with every level of nesting, so
+# loading them through ruamel never finishes. They are left out of the comparison of loads
+# (``reference_load=True``) and nothing else; the compat module reads them in under a millisecond.
+RUAMEL_NEVER_FINISHES = {"own/safety/duplicate-keys-nested-200-levels-deep"}
 
-def kit_cases(kit: str):
+
+def kit_cases(kit: str, reference_load: bool = False):
     """(case id, path) of every yaml-test-suite input and every kit case input."""
     suites = pathlib.Path(kit) / "suites"
     for p in sorted(suites.glob("yaml-test-suite/data-*/**/in.yaml")):
         rel = p.parent.relative_to(suites / "yaml-test-suite").as_posix().split("/", 1)[1]
         yield "yts/" + rel, p
     for p in sorted(suites.glob("own/cases/*/*/input.yaml")):
-        yield "own/" + p.parent.relative_to(suites / "own/cases").as_posix(), p
+        cid = "own/" + p.parent.relative_to(suites / "own/cases").as_posix()
+        if reference_load and cid in RUAMEL_NEVER_FINISHES:
+            continue
+        yield cid, p
 
 
 def _kind(v: Any) -> Any:

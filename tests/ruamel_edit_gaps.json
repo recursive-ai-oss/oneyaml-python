@@ -1,10 +1,4 @@
 {
- "own/diagnostics/verbatim-tag-of-a-lone-bang-is-invalid|set-first-leaf": {
-  "native": "the plain-data check does not model a kept tag or an alias target"
- },
- "own/diagnostics/verbatim-tag-that-is-not-a-uri-is-invalid|set-first-leaf": {
-  "native": "the plain-data check does not model a kept tag or an alias target"
- },
  "own/edit/alias-refusal-remove-container-of-anchor-with-aliases|set-last-leaf-int": {
   "native": "the plain-data check does not model a kept tag or an alias target",
   "pure": "the plain-data check does not model a kept tag or an alias target"
@@ -30,9 +24,6 @@
  "own/edit/patch-copies-of-written-out-aliases-are-charged|set-first-leaf": {
   "native": "the plain-data check does not model a kept tag or an alias target",
   "pure": "the plain-data check does not model a kept tag or an alias target"
- },
- "own/edit/remove-explicit-first-key-before-empty-explicit-key-in-flow-mapping|set-first-leaf": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
  },
  "own/edit/replace-custom-tagged-scalar-then-edit-neighbour|set-first-leaf": {
   "native": "the plain-data check does not model a kept tag or an alias target",
@@ -79,18 +70,6 @@
   "native": "the plain-data check does not model a kept tag or an alias target",
   "pure": "the plain-data check does not model a kept tag or an alias target"
  },
- "yts/4ABK|set-first-leaf": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
- },
- "yts/4FJ6|add-key-deep": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
- },
- "yts/4FJ6|append": {
-  "pure": "the engine edit does not read back as the edited data (unreadable)"
- },
- "yts/4FJ6|insert-seq": {
-  "pure": "the engine edit does not read back as the edited data (unreadable)"
- },
  "yts/6CK3|set-first-leaf": {
   "pure": "the plain-data check does not model a kept tag or an alias target"
  },
@@ -101,15 +80,6 @@
  "yts/7FWL|set-first-leaf": {
   "native": "the plain-data check does not model a kept tag or an alias target",
   "pure": "the plain-data check does not model a kept tag or an alias target"
- },
- "yts/8KB6|set-last-leaf-int": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
- },
- "yts/9BXH|set-last-leaf-int": {
-  "pure": "the engine edit does not read back as the edited data (unreadable)"
- },
- "yts/9MMW|add-key-deep": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
  },
  "yts/CUP7|set-last-leaf-int": {
   "native": "the plain-data check does not model a kept tag or an alias target",
@@ -122,30 +92,9 @@
   "native": "the plain-data check does not model a kept tag or an alias target",
   "pure": "the plain-data check does not model a kept tag or an alias target"
  },
- "yts/FRK4|set-first-leaf": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
- },
  "yts/JS2J|set-first-leaf": {
   "native": "the plain-data check does not model a kept tag or an alias target",
   "pure": "the plain-data check does not model a kept tag or an alias target"
- },
- "yts/L24T/00|add-key": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
- },
- "yts/L24T/00|add-key-deep": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
- },
- "yts/L24T/00|set-first-leaf": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
- },
- "yts/L24T/01|add-key": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
- },
- "yts/L24T/01|add-key-deep": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
- },
- "yts/L24T/01|set-first-leaf": {
-  "pure": "the engine edit does not read back as the edited data (wrong)"
  },
  "yts/M5C3|set-first-leaf": {
   "native": "the plain-data check does not model a kept tag or an alias target",

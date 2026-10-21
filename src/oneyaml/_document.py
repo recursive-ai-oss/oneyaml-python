@@ -293,25 +293,39 @@ class _Node:
             return self._length(self._h())
 
     def __iter__(self) -> Iterator[Any]:
-        h = self._h()
-        kind = self._kind()
-        steps = list(self._path)
-        if kind == "mapping":
-            return iter(h.keys(self._d, steps))
-        if kind == "sequence":
-            return (self._view((*self._path, str(i))) for i in range(self._length(h)))
+        with self._core.lock:
+            h = self._h()
+            kind = self._kind()
+            if kind == "mapping":
+                return iter(h.keys(self._d, list(self._path)))
+            if kind == "sequence":
+                return self._items(self._length(h))
         raise TypeError("a scalar is not iterable")
 
+    def _items(self, count: int) -> Iterator[Any]:
+        # Each item is read under the lock after the view is checked again: another thread's edit
+        # between two items must not be read through a stale position. A sequence that shrank
+        # ends the loop, as a list would.
+        for i in range(count):
+            with self._core.lock:
+                self._h()
+                try:
+                    item = self._view((*self._path, str(i)))
+                except IndexError:
+                    return
+            yield item
+
     def __contains__(self, key: Any) -> bool:
-        kind = self._kind()
-        h = self._h()
-        if kind == "mapping":
-            path = (*self._path, _token(key))
-            try:
-                h.kind(self._d, list(path))
-            except (KeyError, IndexError):
-                return False
-            return True
+        with self._core.lock:
+            kind = self._kind()
+            h = self._h()
+            if kind == "mapping":
+                path = (*self._path, _token(key))
+                try:
+                    h.kind(self._d, list(path))
+                except (KeyError, IndexError):
+                    return False
+                return True
         if kind == "sequence":
             return any(v is key or v == key for v in self)
         raise TypeError("a scalar has no items")

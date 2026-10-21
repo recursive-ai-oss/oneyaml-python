@@ -411,6 +411,8 @@ def _check_keys(text: str, docs: list[Doc]) -> None:
                             odd = True
                 else:
                     texts.append(None)
+                    if kind[j] == K_ALIAS:
+                        odd = True  # named by what it points at, which the texts do not hold
                 v = j + sz[j]
                 j = v + sz[v]
             if not odd and len(set(texts)) == len(texts):
@@ -420,9 +422,10 @@ def _check_keys(text: str, docs: list[Doc]) -> None:
             j = row + 1
             while j < end:
                 v = j + sz[j]
-                if kind[j] == K_SCALAR:
+                at = follow(doc, j) if kind[j] == K_ALIAS else j
+                if kind[at] == K_SCALAR:
                     try:
-                        kv = scalar_value(doc, j, None, wide)
+                        kv = scalar_value(doc, at, None, wide)
                     except (_Fail, Fail, ValueError):
                         kv = _NOPE
                     if wide and type(kv) is float and id(kv) in wide:
@@ -561,6 +564,11 @@ def key_value(doc: Doc, row: int, cap: int | None = None) -> Any:
     if doc.kind[row] == K_SCALAR:
         return scalar_value(doc, row, cap)
     v = _walk(doc, row, cap, {}, {}, None)
+    # The same bound as a load: a key nested deeper could not be compared or hashed safely.
+    from ._construct import KEY_DEPTH, _measure
+
+    if _measure(v, {})[2] > KEY_DEPTH:
+        raise _Fail(f"a mapping key nests deeper than {KEY_DEPTH} levels", "limit", doc.st[row])
     return freeze(v, 1 << 62, 1 << 62)[0]
 
 

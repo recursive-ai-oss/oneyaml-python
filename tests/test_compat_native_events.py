@@ -118,21 +118,13 @@ def _corpus():
     return texts
 
 
-# Inputs on which the engine's events differ from the pure parser's: it reads them the other
-# way round (the kit lists the same case for the native backend). Strict: when the engine
-# changes and the backends agree, the entry has to go.
+# Inputs on which the two backends' events differ. Strict: when they agree, the entry has to go.
+# The engine reads an undeclared tag handle as unresolved where the pure parser calls it a
+# syntax error (the kit lists the same case for the native backend); the pure parser rejects a
+# second byte order mark that opens a document, which the engine accepts.
 ENGINE_DEVIATIONS = [
-    "own:diagnostics/c1-control-in-a-comment-is-an-error",
-    "own:diagnostics/del-in-a-comment-is-an-error",
-    "own:diagnostics/empty-key-with-adjacent-flow-value-is-invalid",
-    "own:diagnostics/explicit-key-with-adjacent-flow-value-is-invalid",
-    "own:diagnostics/plain-key-with-adjacent-flow-value-is-invalid",
-    "own:diagnostics/property-only-key-with-adjacent-flow-value-is-invalid",
-    "own:diagnostics/verbatim-tag-of-a-lone-bang-is-invalid",
-    "own:diagnostics/verbatim-tag-that-is-not-a-uri-is-invalid",
-    "own:parse/tab-only-line-after-block-scalar-at-end",
-    "own:parse/tag-suffix-utf-8-percent-escape-is-kept",
-    "own:schema/escaped-surrogate-pair-is-one-character",
+    "own:diagnostics/undeclared-tag-handle-is-a-syntax-error",
+    "own:parse/two-byte-order-marks-before-the-first-document",
 ]
 # Not a kit case: the engine says an undeclared tag handle is unresolved, the pure parser calls it
 # a syntax error (both reject the stream).

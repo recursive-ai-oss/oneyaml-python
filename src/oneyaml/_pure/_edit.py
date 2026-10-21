@@ -119,7 +119,7 @@ def doc_break(doc: Doc, near: int = 0) -> str:
 class Loc:
     """A node found by a path: its row, the key row of its entry, its parent and ancestors."""
 
-    __slots__ = ("alias", "anc", "index", "key", "parent", "prev_end", "row", "token")
+    __slots__ = ("alias", "anc", "index", "key", "parent", "prev_end", "row", "tight", "token")
 
     def __init__(self) -> None:
         self.row = 0
@@ -130,6 +130,9 @@ class Loc:
         self.index = -1
         self.prev_end = -1
         self.token: str | None = None
+        # The node is replaced because its last entry went: the comments that entry owns are
+        # dealt with by the removal, so the node itself takes only what its own column owns.
+        self.tight = False
 
 
 def is_index_text(tok: str) -> bool:
@@ -319,15 +322,41 @@ def scalar_extent(doc: Doc, r: int) -> int:
                 break
             j = next_line(text, k)
         return j
+    if doc.sty[r] in "|>":
+        # Lines of spaces wider than the content indent are content, though the scalar's own end
+        # leaves them out; replacing the scalar takes them along.
+        start = e if e > 0 and text[e - 1] in "\r\n" else next_line(text, e)
+        out = _spaces_of_block_scalar(doc, r, start)
+        return out if out > start else e
     return e
 
 
-def node_extent(doc: Doc, r: int) -> int:
-    """The end of a node, with the blank lines of a keep scalar that ends it."""
+def node_extent(doc: Doc, r: int, above: int | None = None) -> int:
+    """The end of a node, with the blank lines of a keep scalar that ends it. A block collection
+    also takes the comments of its last line and the comment lines indented deeper than
+    ``above`` (the column of the entry that holds it; its own column when None)."""
     last = r + doc.sz[r] - 1
     if doc.kind[last] == K_SCALAR and doc.sty[last] in "|>":
         return max(doc.en[r], scalar_extent(doc, last))
-    return doc.en[r]
+    e = doc.en[r]
+    if doc.kind[r] in (K_MAP, K_SEQ) and doc.sty[r] == "b":
+        # The comments of a block collection's last line, and the comment lines indented deeper
+        # than its entries, belong to its last entry, so they belong to the collection.
+        text = doc.text
+        e += len(_line_comment(text, e))
+        kc = col(text, doc.st[r]) if above is None else above
+        b = e if e > 0 and text[e - 1] in "\r\n" else next_line(text, e)
+        owned = False
+        while b < len(text):
+            m = _COMMENT_LINE(text, b)
+            if m and len(m.group(1)) > kc:
+                b = next_line(text, m.end())
+                owned = True
+            else:
+                break
+        if owned:
+            e = b
+    return e
 
 
 def block_content_indent(doc: Doc, r: int) -> int | None:
@@ -677,6 +706,17 @@ def _slot(doc: Doc, loc: Loc) -> tuple[str, int]:
     return "seq", dash_of(doc, p, loc.index, loc.prev_end) + 1
 
 
+def _slot_col(doc: Doc, loc: Loc, slot_kind: str, ind_end: int) -> int | None:
+    """The column of the key or dash that leads to the node (None at the root)."""
+    if loc.tight:
+        return None
+    if slot_kind == "map":
+        return col(doc.text, entry_start(doc, loc.key))
+    if slot_kind == "seq":
+        return col(doc.text, ind_end - 1)
+    return None
+
+
 def _line_comment(text: str, pos: int) -> str:
     # A comment right after a line break is a line of its own, not a trailing comment.
     if pos > 0 and text[pos - 1] in "\r\n":
@@ -757,14 +797,17 @@ def _inline_target(doc: Doc, loc: Loc, slot_kind: str, ind_end: int) -> tuple[in
         return a, a, prefix, suffix
     if k in (K_MAP, K_SEQ) and doc.sty[r] == "b" and slot_kind in ("map", "seq"):
         # a block collection becomes inline: it stays on the key's line, with the comment there
-        e2 = node_extent(doc, r)
+        e2 = node_extent(doc, r, _slot_col(doc, loc, slot_kind, ind_end))
         return (
             ind_end,
             e2 + (len(_line_comment(text, e2)) if e2 == en0 else 0),
             " ",
             (_line_comment(text, ind_end) if ps0 > ind_end else ""),
         )
-    b = scalar_extent(doc, r) if k == K_SCALAR and doc.sty[r] in "|>" else en0
+    if k == K_SCALAR and doc.sty[r] in "|>":
+        b = scalar_extent(doc, r)
+    else:
+        b = node_extent(doc, r) if k in (K_MAP, K_SEQ) else en0
     return ps0, b, "", ""
 
 
@@ -796,8 +839,12 @@ def _put_inline(
     else:
         if isinstance(tv, str) and old_block and not pflow:
             blk = _block_for(doc, loc, r, tv, sty0, en0, en_ext, nl)
+        elif isinstance(tv, str) and "\n" in tv and k in (K_MAP, K_SEQ) and not pflow:
+            # Text with line breaks that takes the place of a collection is new content, so it
+            # is a literal block (only an inline scalar's replacement stays on its line, quoted).
+            blk = _block_over_collection(doc, loc, tv, slot_kind, ind_end, nl)
         if blk is not None:
-            content, style, valtext = blk, sty0, tv
+            content, style, valtext = blk, sty0 if old_block else "|", tv
         else:
             hint = sty0 if sty0 in "'\"" and not empty_old else None
             content, style, valtext = W.scalar_inline(tv, hint, pflow, False, row_tag is not None)
@@ -820,18 +867,48 @@ def _put_inline(
     splice(doc, a, b, full, r, r + doc.sz[r], rows, loc.anc, (en0, rows.en[0]))
 
 
+def _block_over_collection(doc, loc, tv, slot_kind, ind_end, nl) -> str | None:
+    """A literal block scalar for ``tv`` where a collection stood (None: it cannot be one)."""
+    text = doc.text
+    if doc.sty[loc.row] in "fp" and _line_comment(text, doc.en[loc.row]).strip():
+        return None  # the comment after the brackets would end up in the scalar
+    if slot_kind in ("map", "seq") and _line_comment(text, ind_end).strip():
+        return None  # a comment on the key's line would end up in the scalar
+    if slot_kind == "map":
+        lay = make_layout(doc, loc.parent, loc.anc, loc.row)
+        par = col(text, entry_start(doc, loc.key))
+        ci = par + lay.step
+    elif slot_kind == "seq":
+        lay = make_layout(doc, loc.parent, loc.anc, loc.row)
+        par = col(text, ind_end - 1)
+        ci = par + 2
+    elif slot_kind == "root":
+        par = 0
+        ci = make_layout(doc, -1, [], None).step
+    else:
+        return None
+    res = W.block_scalar(tv, "|", ci, nl, None, par, False)
+    if res is None or res[1] > 1:
+        return None
+    if slot_kind == "root" and res[0][1:2].isdigit():
+        return None  # an indentation indicator at the root reads differently; quote instead
+    return res[0]
+
+
 def _block_for(doc, loc, r, tv, sty0, en0, en_ext, nl) -> str | None:
     """A literal or folded scalar holding ``tv`` laid out like the old one (None: it cannot)."""
     text = doc.text
     chomp, ind = scalar_header(doc, r)
     p = loc.parent
     par = col(text, doc.st[p]) if p >= 0 else 0
+    # A root node is read as if its parent were at column -1: `|1` there means no indentation.
+    ipar = par if p >= 0 else -1
     ci = block_content_indent(doc, r)
     if ind is not None:
-        ci = par + ind
+        ci = ipar + ind
     elif ci is None:
         ci = par + 2
-    res = W.block_scalar(tv, sty0, ci, nl, chomp, par, ind is not None)
+    res = W.block_scalar(tv, sty0, ci, nl, chomp, ipar, ind is not None)
     if res is None:
         return None
     body, t = res
@@ -894,6 +971,7 @@ def _put_collection(doc, loc, tv, pr, anchor, row_tag, slot_kind, ind_end, pflow
         indent = col(text, st0) if (k in (K_MAP, K_SEQ) and only_blanks_before(text, st0)) else 0
     else:
         lay = make_layout(doc, p, anc, r)
+        lay.hint = lay.key_hint = None  # a new collection's strings are not its siblings' kind
         if slot_kind == "map":
             kc = col(text, entry_start(doc, loc.key))
             indent = kc + (lay.seq_off if is_seq else lay.step)
@@ -926,6 +1004,8 @@ def _put_collection(doc, loc, tv, pr, anchor, row_tag, slot_kind, ind_end, pflow
             props_at = a + 1  # after the space that follows the marker
         else:
             a = ps0
+            if indent and not pr and only_blanks_before(text, a):
+                a = line_start(text, a)  # the new text brings its own indentation
             props_at = a  # the properties lead the new text
             b = node_extent(doc, r)
             if b == doc.en[r]:
@@ -952,12 +1032,17 @@ def _put_collection(doc, loc, tv, pr, anchor, row_tag, slot_kind, ind_end, pflow
         b = a + len(tail)
     elif later_line:
         tail = _line_comment(text, ind_end)
-        b = node_extent(doc, r)
+        b = node_extent(doc, r, _slot_col(doc, loc, slot_kind, ind_end))
         if b == doc.en[r]:
             b += len(_line_comment(text, b))
     else:
-        b0 = scalar_extent(doc, r) if k == K_SCALAR else doc.en[r]
-        tail = _line_comment(text, b0)
+        if k in (K_MAP, K_SEQ) and doc.sty[r] == "b":
+            # A block collection that starts on the key's line takes its comments along.
+            b0 = node_extent(doc, r, _slot_col(doc, loc, slot_kind, ind_end))
+            tail = ""
+        else:
+            b0 = scalar_extent(doc, r) if k == K_SCALAR else doc.en[r]
+            tail = _line_comment(text, b0)
         b = b0 + len(tail)
     compact = slot_kind == "seq" and not pr and not tail.strip()
     consumed = b > a and text[b - 1] in "\r\n"
@@ -1026,12 +1111,14 @@ def entry_end(doc: Doc, key: int, val: int, key_col: int, after_scalar: bool = F
     return b
 
 
-def insert_member(doc: Doc, loc: Loc, key: str, value: Any) -> None:
-    """Add ``key: value`` at the end of the mapping at ``loc`` (a key that exists is replaced)."""
+def insert_member(doc: Doc, loc: Loc, key: str, value: Any, by_text: bool = True) -> None:
+    """Add ``key: value`` at the end of the mapping at ``loc``. A key that reads as ``key`` is
+    replaced, matched by its text as a pointer does; with ``by_text`` off the caller has
+    already looked for the exact key and found none (a key with a local tag is another key)."""
     p = loc.row
     if loc.alias:
         raise refuse("refused-alias", "the path goes through an alias")
-    v, kr = T.find_member(doc, p, key) if isinstance(key, str) else (-1, -1)
+    v, kr = T.find_member(doc, p, key) if by_text and isinstance(key, str) else (-1, -1)
     if v == -2:
         raise refuse("refused-ambiguous", f"more than one key reads {key!r}")
     if v >= 0:
@@ -1044,11 +1131,11 @@ def insert_member(doc: Doc, loc: Loc, key: str, value: Any) -> None:
         return
     anc = [*loc.anc, p]
     text = doc.text
+    if doc.sty[p] == "p":
+        _braces_for_pair(doc, p, loc.anc)
     if doc.sty[p] == "f":
         _insert_flow(doc, p, anc, None, key, value)
         return
-    if doc.sty[p] == "p":
-        raise refuse("patch-invalid", "cannot add a key to an implicit pair in a flow sequence")
     ents = members(doc, p)
     lk, lv = ents[-1]
     kcol = col(text, entry_start(doc, lk))
@@ -1206,6 +1293,7 @@ def remove_node(doc: Doc, loc: Loc) -> None:
     if n == 1:
         # the collection would be empty: it becomes {} or []
         pl = Loc()
+        pl.tight = True
         pl.row = p
         pl.anc = anc[:-1]
         pl.parent = anc[-2] if len(anc) >= 2 else -1
@@ -1355,6 +1443,21 @@ def _remove_flow(doc: Doc, loc: Loc, lo: int, hi: int, is_map: bool) -> None:
     else:
         a, b = spans[idx - 1][1], e
     splice(doc, a, b, "", lo, hi, None, anc)
+
+
+def _braces_for_pair(doc: Doc, p: int, anc: list[int]) -> None:
+    """An implicit pair inside a flow sequence (``[a: 0]``) gets the braces of the mapping it
+    stands for (``[{a: 0}]``), so that it can take more members."""
+    size = doc.sz[p]
+    s, e = doc.st[p], doc.en[p]
+    rows = Doc("")
+    for name in ("kind", "ps", "st", "en", "sz", "sty", "anc", "tag", "val"):
+        setattr(rows, name, list(getattr(doc, name)[p : p + size]))
+    for name in ("ps", "st", "en"):
+        col_ = getattr(rows, name)
+        col_[1:] = [x + 1 for x in col_[1:]]
+    rows.ps[0], rows.st[0], rows.en[0], rows.sty[0] = s, s, e + 2, "f"
+    splice(doc, s, e, "{" + doc.text[s:e] + "}", p, p + size, rows, anc, (e, e + 2))
 
 
 def _replace_pair(doc: Doc, pl: Loc, p: int) -> None:

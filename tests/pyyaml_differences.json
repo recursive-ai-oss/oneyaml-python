@@ -20,12 +20,6 @@
   ],
   "reason": "PyYAML accepts input that YAML 1.2 forbids"
  },
- "own/diagnostics/c1-control-in-a-comment-is-an-error": {
-  "backends": [
-   "native"
-  ],
-  "reason": "PyYAML rejects input that YAML 1.2 accepts"
- },
  "own/diagnostics/closing-quote-at-the-margin-of-a-nested-scalar": {
   "backends": [
    "pure",
@@ -40,27 +34,17 @@
   ],
   "reason": "PyYAML accepts input that YAML 1.2 forbids"
  },
- "own/diagnostics/del-in-a-comment-is-an-error": {
-  "backends": [
-   "native"
-  ],
-  "reason": "PyYAML rejects input that YAML 1.2 accepts"
- },
- "own/diagnostics/empty-key-with-adjacent-flow-value-is-invalid": {
-  "backends": [
-   "native"
-  ],
-  "reason": "PyYAML rejects input that YAML 1.2 accepts"
- },
  "own/diagnostics/explicit-key-with-adjacent-flow-value-is-invalid": {
   "backends": [
-   "pure"
+   "pure",
+   "native"
   ],
   "reason": "PyYAML accepts input that YAML 1.2 forbids"
  },
  "own/diagnostics/plain-key-with-adjacent-flow-value-is-invalid": {
   "backends": [
-   "pure"
+   "pure",
+   "native"
   ],
   "reason": "PyYAML accepts input that YAML 1.2 forbids"
  },
@@ -73,11 +57,33 @@
  },
  "own/diagnostics/verbatim-tag-of-a-lone-bang-is-invalid": {
   "backends": [
-   "pure"
+   "pure",
+   "native"
   ],
   "reason": "PyYAML accepts input that YAML 1.2 forbids"
  },
+ "own/edit/add-item-after-a-keep-scalar-of-one-line-of-spaces-with-no-final-line-break": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a block scalar keeps a last line that holds only spaces; PyYAML drops its line break"
+ },
+ "own/edit/add-key-after-a-block-scalar-ending-in-a-line-of-spaces-with-no-final-line-break": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a block scalar keeps a last line that holds only spaces; PyYAML drops its line break"
+ },
  "own/edit/add-to-bare-document-after-bom": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/edit/append-to-a-flow-sequence-whose-last-entry-has-a-flow-key": {
   "backends": [
    "pure",
    "native"
@@ -140,6 +146,20 @@
   ],
   "reason": "PyYAML rejects input that YAML 1.2 accepts"
  },
+ "own/edit/set-keep-scalar-of-a-line-of-spaces-with-no-final-line-break-to-an-integer": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a block scalar keeps a last line that holds only spaces; PyYAML drops its line break"
+ },
+ "own/edit/set-literal-ending-in-a-line-of-spaces-with-no-final-line-break-to-an-integer": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "a block scalar keeps a last line that holds only spaces; PyYAML drops its line break"
+ },
  "own/parse/bom-after-bare-document-before-directives-end": {
   "backends": [
    "pure",
@@ -183,6 +203,13 @@
   "reason": "PyYAML rejects input that YAML 1.2 accepts"
  },
  "own/parse/encoding-utf-8-without-bom": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "PyYAML rejects input that YAML 1.2 accepts"
+ },
+ "own/parse/flow-sequence-keys-on-consecutive-lines": {
   "backends": [
    "pure",
    "native"
@@ -247,7 +274,8 @@
  },
  "own/parse/tab-only-line-after-block-scalar-at-end": {
   "backends": [
-   "pure"
+   "pure",
+   "native"
   ],
   "reason": "PyYAML rejects input that YAML 1.2 accepts"
  },
@@ -257,6 +285,13 @@
    "native"
   ],
   "reason": "an indentation indicator on a top-level literal block counts from the document; PyYAML ignores it"
+ },
+ "own/parse/two-byte-order-marks-before-the-first-document": {
+  "backends": [
+   "pure",
+   "native"
+  ],
+  "reason": "any number of byte order marks may begin a document (YAML 1.2 section 9.2); PyYAML keeps the second in the first key (the pure backend does not accept the second yet)"
  },
  "own/roundtrip/explicit-and-complex-keys": {
   "backends": [

@@ -178,9 +178,6 @@ def block_scalar(
     else:
         ch = "+"
     lines = body.split("\n")
-    for line in lines:
-        if line and line.strip(" \t") == "":
-            return None
     first = next(line for line in lines if line)
     need = first[0] in " \t"
     head = style
@@ -250,6 +247,9 @@ def _key_text(k: Any, lay: Layout) -> tuple[str, bool]:
         return scalar_inline(k, lay.key_hint, False, False)[0], True
     if isinstance(k, (str, int, float, bool)) or k is None:
         return scalar_inline(k, lay.key_hint, False, True)[0], False
+    if _is_map(k) or isinstance(k, (list, tuple)):
+        # A collection used as a key: the explicit form, the key itself in flow style.
+        return flow_text(k, None), True
     raise TypeError(f"cannot write a {type(k).__name__} as a mapping key")
 
 
@@ -337,6 +337,9 @@ def block_text(
     if isinstance(top, Tagged):
         top = top.value
     stack.append([_entries(top), 0, indent, _is_map(top)])
+    # Quoting is copied from the siblings of what is added, so only the entries of the first
+    # frame follow the layout's hints; content nested inside a new member is written plain.
+    bare = Layout(step, lay.seq_off, nl)
     if inline_first:
         cur = ""
     while stack:
@@ -351,7 +354,7 @@ def block_text(
         cur = None
         if is_map:
             k, x = ent
-            ktxt, explicit = _key_text(k, lay)
+            ktxt, explicit = _key_text(k, lay if len(stack) == 1 else bare)
             if explicit:
                 out.append(lead + "? " + ktxt)
                 line = " " * ind + ":"
@@ -399,7 +402,7 @@ def block_text(
                 if extra >= 0:
                     out.append(line + " " + text + nl * extra)
                     continue
-        text, _style, _val = scalar_inline(x, lay.hint)
+        text, _style, _val = scalar_inline(x, lay.hint if len(stack) == 1 else None)
         out.append(line + " " + (tag + " " if tag else "") + text)
     return nl.join(out)
 

@@ -92,7 +92,7 @@ def test_kit_cases_read_as_ruamel_reads_them(api, typ):
     listed = json.loads((HERE / "ruamel_differences.json").read_text())
     seen = set()
     compared = 0
-    for cid, path in kit_cases(KIT):
+    for cid, path in kit_cases(KIT, reference_load=True):
         text = _text(path)
         if text is None:
             continue
