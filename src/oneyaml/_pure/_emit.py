@@ -149,6 +149,16 @@ def _float(x: float) -> str:
     return r
 
 
+def _base_str(s: str) -> str:
+    """The text of a ``str`` or a subclass of it, read without calling anything it overrides.
+
+    ``str.__str__`` is not enough: PyPy hands back the subclass instance itself, which would
+    still answer ``len`` and slicing with the subclass's own methods. Concatenating the empty
+    string always builds a plain ``str``.
+    """
+    return str.__add__(s, "")
+
+
 def _int(v: int) -> str:
     try:
         return int.__repr__(v)
@@ -159,7 +169,7 @@ def _int(v: int) -> str:
 def _tag(tag: Any) -> str:
     if not issubclass(type(tag), str):
         raise TypeError(f"a tag must be a str, not {type(tag).__name__}")
-    tag = str.__str__(tag)
+    tag = _base_str(tag)
     if _SURROGATE(tag):
         raise ValueError(_LONE_SURROGATE)
     if not tag:
@@ -269,7 +279,7 @@ def _plain(v: Any, flow: bool, cpad: str | None) -> Any:
     # Subclasses are read as their base type's data, never through overridden methods, as in
     # the native backend.
     if issubclass(t, str):
-        return _string(str.__str__(v), flow, cpad)
+        return _string(_base_str(v), flow, cpad)
     if issubclass(t, int):
         return _int(v)
     if issubclass(t, float):

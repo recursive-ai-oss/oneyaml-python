@@ -24,6 +24,7 @@ jobs:
   # Formatting, static analysis and the public-repository guards.
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,8 +99,10 @@ jobs:
   # The suite on both backends. While the repository is private only three
   # interpreters run; once it is public the whole list does, with no edit here.
   # "native: false" runs the pure backend alone (no native wheel for that interpreter).
+  # The timeout is far above the slowest healthy job, so a hang fails in minutes, not hours.
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false
@@ -139,6 +142,7 @@ jobs:
   # environment and imported. Adding a platform is a new matrix entry.
   wheels:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

@@ -83,6 +83,8 @@ def _native_engine_deviation(item):
         return None
     if spec is not None and not spec.id.startswith("native"):
         return None
+    if spec is None and not HAS_NATIVE:
+        return None  # a test over both backends has nothing to deviate from
     text = spec.params.get("text") if spec is not None else None
     return NATIVE_ENGINE_DEVIATIONS.get((item.originalname, text))
 
