@@ -202,6 +202,10 @@ def build(text: str, events: list[tuple]) -> tuple[list[Doc], str]:  # noqa: C90
             r = stack.pop()
             counts.pop()
             sz[r] = len(kind) - r
+            if sty[r] == "f" and k == MAP_END and text[e[1] : e[1] + 1] != "}":
+                # A single pair in a flow sequence whose key is a flow collection (`[a]: 1`)
+                # starts with a bracket too; only a real mapping ends with a brace.
+                sty[r] = "p"
             if sty[r] == "f":
                 j = e[1]
                 if text[j : j + 1] in ("]", "}") and text[j : j + 1] != "":
