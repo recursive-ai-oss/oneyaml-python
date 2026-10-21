@@ -556,3 +556,69 @@ def test_big_input_with_deep_nesting(api):
     assert len(got) == 2001
     with pytest.raises(LimitError):
         api.loads(text + "- " + "[" * 20_000 + "\n", limits=Limits(depth=10_000))
+
+
+# ---- nesting inside a mapping key ------------------------------------------------------------
+# A key is hashed and compared by the interpreter, which recurses in C; both backends refuse a
+# key nested deeper than 200 levels, whatever the limits say.
+
+
+def _key(open_, close, depth, leaf="x"):
+    return "? " + open_ * depth + leaf + close * depth + "\n: v\n"
+
+
+@pytest.mark.parametrize(
+    ("open_", "close"), [("[", "]"), ("{a: ", "}"), ("!t [", "]"), ("!t {a: ", "}")]
+)
+def test_key_nesting_of_200_is_accepted_and_201_refused(api, open_, close):
+    loaded = api.loads(_key(open_, close, 200))
+    assert len(loaded) == 1
+    assert hash(next(iter(loaded))) is not None
+    with pytest.raises(LimitError) as e:
+        api.loads(_key(open_, close, 201))
+    assert e.value.category == "limit"
+    assert e.value.line == 1
+
+
+@pytest.mark.parametrize("depth", [2000, 9000])
+@pytest.mark.parametrize("open_,close", [("{a: ", "}"), ("!t [", "]"), ("[", "]")])
+def test_deep_key_is_a_limit_error_not_a_recursion_error(api, open_, close, depth):
+    with pytest.raises(LimitError):
+        api.loads(_key(open_, close, depth))
+
+
+def test_key_depth_is_independent_of_limits(api):
+    with pytest.raises(LimitError):
+        api.loads(_key("[", "]", 200_000), limits=Limits.none())
+    with pytest.raises(LimitError):
+        api.loads(_key("{a: ", "}", 5000), limits=Limits.none())
+
+
+def test_deep_duplicate_keys_are_found_without_recursion_trouble(api):
+    k = "[" * 200 + "x" + "]" * 200
+    with pytest.raises(YAMLError) as e:
+        api.loads(f"? {k}\n: 1\n? {k}\n: 2\n")
+    assert e.value.category == "duplicate-key"
+
+
+def test_an_alias_used_as_a_key_counts_its_depth(api):
+    deep = "[" * 150 + "x" + "]" * 150
+    assert len(api.loads(f"a: &x {deep}\n? *x\n: v\n")) == 2
+    # 150 levels shared, plus 100 more around it in the key.
+    with pytest.raises(LimitError):
+        api.loads(f"a: &x {deep}\n? " + "[" * 100 + "*x" + "]" * 100 + "\n: v\n")
+    with pytest.raises(LimitError):
+        api.loads("a: &x " + "[" * 300 + "x" + "]" * 300 + "\n? *x\n: v\n")
+
+
+def test_big_integer_under_a_lowered_interpreter_cap(api):
+    import sys
+
+    before = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(640)
+    try:
+        for n in (700, 1500, 4300):
+            assert api.loads("1" * n) == (10**n - 1) // 9
+            assert api.loads("!!int '" + "1" * n + "'") == (10**n - 1) // 9
+    finally:
+        sys.set_int_max_str_digits(before)

@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 mod classes;
 mod errors;
 mod events;
+mod hook;
 mod input;
 mod limits;
 mod ops;
@@ -19,11 +20,13 @@ use errors::guarded;
 
 /// Parse a document with the engine and drop it; true when it parsed.
 #[pyfunction]
-fn probe(data: &[u8]) -> PyResult<bool> {
-    let Ok(text) = std::str::from_utf8(data) else {
-        return Ok(false);
-    };
-    Ok(oneyaml::Document::parse(text).is_ok())
+fn probe(py: Python<'_>, data: &[u8]) -> PyResult<bool> {
+    guarded(py, || {
+        let Ok(text) = std::str::from_utf8(data) else {
+            return Ok(false);
+        };
+        Ok(oneyaml::Document::parse(text).is_ok())
+    })
 }
 
 /// Read YAML into Python objects: one document, or a list of all of them when `multi`.
@@ -61,7 +64,13 @@ fn _panic_probe(py: Python<'_>) -> PyResult<()> {
     })
 }
 
-// The module holds no shared mutable state, so it declares itself safe to use
+/// Set one of the test switches (see `hook`); 0 turns them all off.
+#[pyfunction]
+fn _test_hook(what: u8) {
+    hook::set(what);
+}
+
+// The module holds no shared mutable state apart from the test switch, so it declares itself safe to use
 // without the GIL (free-threaded builds keep the GIL off).
 #[pymodule(gil_used = false)]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -72,5 +81,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(events_text, m)?)?;
     m.add_function(wrap_pyfunction!(_parse_only, m)?)?;
     m.add_function(wrap_pyfunction!(_panic_probe, m)?)?;
+    m.add_function(wrap_pyfunction!(_test_hook, m)?)?;
     Ok(())
 }

@@ -46,6 +46,7 @@ pub fn with_text<'py, T>(
     // bytes; the copy leaves the buffer free while the load runs.
     if let Ok(buf) = PyBuffer::<u8>::get(data) {
         let bytes = buf.to_vec(py)?;
+        drop(buf);
         return from_bytes(py, &bytes, max_input, f);
     }
     Err(PyTypeError::new_err(format!(

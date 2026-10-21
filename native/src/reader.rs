@@ -16,6 +16,7 @@ use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyT
 
 use crate::classes;
 use crate::errors::{Fail, panic_message, to_pyerr};
+use crate::hook;
 use crate::input::with_text;
 use crate::limits::Lim;
 use crate::ops::{self, Op, Prop};
@@ -30,6 +31,13 @@ const KEY_CACHE_MAX_ENTRIES: usize = 1 << 16;
 const PIPELINE_MIN: usize = 128 * 1024;
 /// Batches the engine may run ahead of the builder.
 const PIPELINE_DEPTH: usize = 4;
+/// Events between looks for a pending signal on the single-thread path.
+const SIGNAL_EVERY: usize = 4096;
+/// How deep collections may nest inside one mapping key. A key is hashed by the interpreter,
+/// which recurses in C once per level of nesting, and equality tests on a hash collision
+/// recurse the same way, so an unbounded key can overflow the C stack. Real keys are a few
+/// levels at most. Fixed: it does not follow `Limits`, and the pure backend uses the same number.
+const KEY_DEPTH: usize = 200;
 
 /// A node registered under an anchor.
 struct Anchored<'py> {
@@ -91,6 +99,10 @@ struct Builder<'py, 's> {
     charged_bytes: usize,
     doc_start: usize,
     documents: usize,
+    /// Collections open inside the mapping key being read (0 outside a key), and where that key
+    /// began.
+    key_depth: usize,
+    key_start: usize,
 }
 
 type R<T> = Result<T, Fail>;
@@ -112,6 +124,8 @@ impl<'py, 's> Builder<'py, 's> {
             charged_bytes: 0,
             doc_start: 0,
             documents: 0,
+            key_depth: 0,
+            key_start: 0,
         }
     }
 
@@ -128,7 +142,7 @@ impl<'py, 's> Builder<'py, 's> {
         for op in batch {
             self.op(op)?;
         }
-        Ok(())
+        poll_signals(self.py)
     }
 
     fn op(&mut self, op: Op<'s>) -> R<()> {
@@ -276,6 +290,15 @@ impl<'py, 's> Builder<'py, 's> {
         };
         let key_mode = self.at_key();
         let py = self.py;
+        if key_mode {
+            if self.key_depth == 0 {
+                self.key_start = at;
+            }
+            if self.key_depth >= KEY_DEPTH {
+                return Err(key_too_deep(self.key_start));
+            }
+            self.key_depth += 1;
+        }
         let body = if map {
             Body::Map {
                 dict: PyDict::new(py),
@@ -322,6 +345,9 @@ impl<'py, 's> Builder<'py, 's> {
         };
         if let Some(t) = &f.tag {
             obj = classes::tagged(py)?.call1((t.as_ref(), obj))?;
+        }
+        if f.key_mode {
+            self.key_depth -= 1;
         }
         let height = f.tallest.saturating_add(1);
         let nodes = f.nodes.saturating_add(1);
@@ -384,8 +410,19 @@ impl<'py, 's> Builder<'py, 's> {
                 at,
             ));
         }
-        if !hashable && self.at_key() {
-            obj = self.freeze(obj, at)?;
+        if self.at_key() {
+            // The shared object counts as nested here too.
+            if self.key_depth.saturating_add(height as usize) > KEY_DEPTH {
+                let start = if self.key_depth == 0 {
+                    at
+                } else {
+                    self.key_start
+                };
+                return Err(key_too_deep(start));
+            }
+            if !hashable {
+                obj = self.freeze(obj, at)?;
+            }
         }
         self.place(obj, height, at, nodes, bytes)
     }
@@ -451,6 +488,14 @@ impl<'py, 's> Builder<'py, 's> {
     }
 }
 
+fn key_too_deep(at: usize) -> Fail {
+    Fail::new(
+        "limit",
+        format!("a mapping key nests deeper than {KEY_DEPTH} levels"),
+        at,
+    )
+}
+
 /// `k` was already in `dict`. Either it is a duplicate key, or YAML keeps it apart from an
 /// earlier key that Python's equality merges with it (`1`, `1.0` and `true`).
 fn collision(dict: &Bound<'_, PyDict>, k: &Bound<'_, PyAny>, at: usize) -> Fail {
@@ -470,9 +515,52 @@ fn collision(dict: &Bound<'_, PyDict>, k: &Bound<'_, PyAny>, at: usize) -> Fail 
     Fail::new("duplicate-key", "duplicate mapping key", at)
 }
 
+/// Let a pending signal (Ctrl-C) end the load: it surfaces as the usual `KeyboardInterrupt`.
+fn poll_signals(py: Python<'_>) -> R<()> {
+    if hook::take(hook::INTERRUPT) {
+        // SAFETY: only sets the flag the interpreter checks; the same call a C signal handler makes.
+        unsafe { pyo3::ffi::PyErr_SetInterrupt() };
+    }
+    py.check_signals().map_err(Fail::Py)
+}
+
+/// Start a helper thread, or say why not. The OS may refuse (a process limit, no memory).
+fn spawn<'scope, 'env, T: Send + 'scope>(
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    name: &str,
+    f: impl FnOnce() -> T + Send + 'scope,
+) -> std::io::Result<std::thread::ScopedJoinHandle<'scope, T>> {
+    if hook::is(hook::REFUSE_THREADS) {
+        return Err(std::io::Error::other("thread refused by test switch"));
+    }
+    std::thread::Builder::new()
+        .name(name.to_string())
+        .spawn_scoped(scope, f)
+}
+
+/// The input read on this thread alone.
+fn run_single<'py, 's>(
+    py: Python<'py>,
+    text: &'s str,
+    cap: usize,
+    settings: &Settings,
+    builder: &mut Builder<'py, 's>,
+) -> R<()> {
+    for (n, ev) in oneyaml_syntax::events_with(text, settings).enumerate() {
+        if n % SIGNAL_EVERY == SIGNAL_EVERY - 1 {
+            poll_signals(py)?;
+        }
+        if let Some(op) = ops::translate(&ev, cap) {
+            builder.op(op)?;
+        }
+    }
+    Ok(())
+}
+
 /// Build the objects from `text`. Small input is read on this thread. For big input the engine
 /// runs on a second thread and turns its events into ops on a third, while this one builds
-/// objects from the ops already made: the three stages overlap.
+/// objects from the ops already made: the three stages overlap. If the OS will not start the
+/// threads, the input is read on this one.
 fn run<'py, 's>(
     py: Python<'py>,
     text: &'s str,
@@ -483,29 +571,38 @@ fn run<'py, 's>(
     let cap = lim.digits;
     if text.len() < PIPELINE_MIN {
         // No batches: for a small input they would cost more than the work they hand over.
-        for ev in oneyaml_syntax::events_with(text, settings) {
-            if let Some(op) = ops::translate(&ev, cap) {
-                builder.op(op)?;
-            }
-        }
-        return Ok(());
+        return run_single(py, text, cap, settings, builder);
     }
     // The other two threads touch no Python object: they read `text` (which the caller keeps
     // alive and unchanged) and hand plain data over. Objects are built here, under the
     // interpreter lock, as batches arrive.
-    std::thread::scope(|scope| {
+    let piped = std::thread::scope(|scope| -> Option<R<()>> {
         let (events_tx, events_rx) = sync_channel(PIPELINE_DEPTH);
         let (ops_tx, ops_rx) = sync_channel(PIPELINE_DEPTH);
-        let parser = scope.spawn(move || {
+        let parser = spawn(scope, "oneyaml-parse", move || {
+            if hook::is(hook::PANIC_IN_PARSER) {
+                panic!("deliberate panic in the parser stage");
+            }
             ops::pull(text, settings, |events| events_tx.send(events).is_ok());
-        });
-        let translator = scope.spawn(move || {
+        })
+        .ok()?;
+        let translator = spawn(scope, "oneyaml-translate", move || {
             for events in events_rx {
+                if hook::is(hook::PANIC_IN_TRANSLATOR) {
+                    panic!("deliberate panic in the translator stage");
+                }
                 if ops_tx.send(ops::translate_batch(events, cap)).is_err() {
                     break;
                 }
             }
         });
+        let Ok(translator) = translator else {
+            // The refused closure took the parser's receiver with it, so the parser stops at its
+            // next hand-over; wait for it, then read on this thread instead.
+            drop(ops_rx);
+            let _ = parser.join();
+            return None;
+        };
         let mut result = Ok(());
         let mut incoming = ops_rx;
         // While the next batch is on its way nothing here needs the interpreter, so let other
@@ -524,18 +621,22 @@ fn run<'py, 's>(
         drop(incoming);
         for stage in [parser, translator] {
             if let Err(payload) = stage.join() {
-                return Err(Fail::Yaml {
+                return Some(Err(Fail::Yaml {
                     category: "other",
                     message: format!(
                         "internal error in the native backend ({}); this is a bug",
                         panic_message(payload.as_ref())
                     ),
                     at: None,
-                });
+                }));
             }
         }
-        result
-    })
+        Some(result)
+    });
+    match piped {
+        Some(r) => r,
+        None => run_single(py, text, cap, settings, builder),
+    }
 }
 
 pub fn load<'py>(

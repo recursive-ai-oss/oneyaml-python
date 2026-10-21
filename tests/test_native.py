@@ -1,8 +1,12 @@
 """What only the native backend has: its guard against panics, thread safety, key sharing."""
 
+import os
+import signal
+import subprocess
 import sys
 import sysconfig
 import threading
+import time
 
 import pytest
 
@@ -135,3 +139,152 @@ def test_several_threads_load_big_documents_at_once(native):
     for t in threads:
         t.join()
     assert bad == []
+
+
+# ---- stages, threads, signals, crashes ---------------------------------------------------------
+
+(OFF, PANIC_IN_PARSER, PANIC_IN_TRANSLATOR, REFUSE_THREADS, INTERRUPT) = range(5)
+
+
+_NATIVE_ENV = {**os.environ, "ONEYAML_BACKEND": "native"}
+
+
+def _big():
+    text = "".join(f"k{i}: [a{i}, {{b: c{i}}}]\n" for i in range(20000))
+    assert len(text) > 128 * 1024
+    return text
+
+
+def _threads():
+    # The helper threads are native ones, which `threading` does not list.
+    try:
+        return len(os.listdir("/proc/self/task"))
+    except OSError:
+        pytest.skip("needs /proc")
+
+
+def _no_thread_left(before):
+    # A joined thread's entry can linger in /proc for a moment after the join returns.
+    for _ in range(200):
+        if _threads() <= before:
+            return
+        time.sleep(0.005)
+    assert _threads() <= before
+
+
+@pytest.fixture
+def hook(native):
+    yield native._test_hook
+    native._test_hook(OFF)
+
+
+@pytest.mark.parametrize("stage", [PANIC_IN_PARSER, PANIC_IN_TRANSLATOR])
+def test_a_panic_in_a_pipeline_stage_becomes_a_yaml_error(native, hook, stage):
+    text = _big()
+    expected = oneyaml.loads(text)
+    before = _threads()
+    hook(stage)
+    with pytest.raises(YAMLError) as e:
+        oneyaml.loads(text)
+    assert e.value.category == "other"
+    assert "deliberate panic" in e.value.message
+    hook(OFF)
+    _no_thread_left(before)
+    assert oneyaml.loads(text) == expected
+
+
+def test_big_input_is_read_on_one_thread_when_the_os_refuses_threads(native, hook):
+    text = _big()
+    expected = oneyaml.loads(text)
+    with pytest.raises(YAMLError) as normal:
+        oneyaml.loads(text + "x: [\n")
+    hook(REFUSE_THREADS)
+    assert oneyaml.loads(text) == expected
+    with pytest.raises(YAMLError) as e:
+        oneyaml.loads(text + "x: [\n")
+    assert (e.value.category, e.value.line, e.value.column) == (
+        normal.value.category,
+        normal.value.line,
+        normal.value.column,
+    )
+
+
+def test_big_input_loads_when_the_process_may_start_no_threads():
+    code = (
+        "import resource, oneyaml\n"
+        "text = ''.join(f'k{i}: [a{i}, {{b: c{i}}}]\\n' for i in range(20000))\n"
+        "resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))\n"
+        "print(len(oneyaml.loads(text)))\n"
+    )
+    if sys.platform != "linux":
+        pytest.skip("setrlimit(RLIMIT_NPROC) is checked on Linux")
+    done = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, env=_NATIVE_ENV
+    )
+    assert done.stdout.strip() == "20000", done.stderr[-500:]
+
+
+def _interrupted(text, hook, probe=None):
+    hook(INTERRUPT)
+
+    def handler(signum, frame):
+        if probe is not None:
+            probe()
+        raise KeyboardInterrupt
+
+    old = signal.signal(signal.SIGINT, handler)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            oneyaml.loads(text)
+    finally:
+        signal.signal(signal.SIGINT, old)
+        hook(OFF)
+
+
+@pytest.mark.skipif(
+    threading.current_thread() is not threading.main_thread(),
+    reason="signals reach the main thread",
+)
+@pytest.mark.parametrize("size", ["small", "big"])
+def test_a_pending_signal_ends_a_load_and_leaves_no_thread(native, hook, size):
+    text = "- 1\n" * 6000 if size == "small" else _big()
+    before = _threads()
+    _interrupted(text, hook)
+    _no_thread_left(before)
+    assert oneyaml.loads(text) == oneyaml.loads(text)
+
+
+def test_the_input_buffer_is_released_before_the_load_runs(native, hook):
+    # While a bytearray is exported it cannot change size; the load copies it and lets go.
+    buf = bytearray(b"- 1\n" * 6000)
+    seen = []
+
+    def probe():
+        try:
+            buf.append(10)
+            seen.append("released")
+        except BufferError:
+            seen.append("still held")
+
+    _interrupted(buf, hook, probe)
+    assert seen == ["released"]
+
+
+def test_many_leading_byte_order_marks_do_not_overflow_the_stack():
+    code = (
+        "import oneyaml\n"
+        "try:\n"
+        "    oneyaml.loads('\\ufeff' * 100000 + 'a: [\\n')\n"
+        "except oneyaml.YAMLError as e:\n"
+        "    print(e.category)\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, env=_NATIVE_ENV
+    )
+    assert done.stdout.strip() == "syntax", (done.returncode, done.stderr[-300:])
+
+
+def test_probe_still_answers(native):
+    assert native.probe(b"a: 1\n") is True
+    assert native.probe(b"a: [\n") is False
+    assert native.probe(b"\xff") is False

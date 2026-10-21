@@ -75,9 +75,12 @@ pub fn category_of(d: &Diagnostic) -> &'static str {
 /// byte offset into `text`.
 pub fn locate(text: &str, at: usize) -> Option<(usize, usize, usize)> {
     // A byte order mark is not a character of the text: columns on its line start after it.
-    if let Some(rest) = text.strip_prefix('\u{feff}') {
-        let bom = text.len() - rest.len();
-        return locate(rest, at.saturating_sub(bom));
+    // A loop, not recursion: the input may open with any number of them.
+    let mut text = text;
+    let mut at = at;
+    while let Some(rest) = text.strip_prefix('\u{feff}') {
+        at = at.saturating_sub(text.len() - rest.len());
+        text = rest;
     }
     let lc = LineIndex::new(text).line_col(at, ColumnUnit::Char)?;
     let offset = text.get(..at)?.chars().count();

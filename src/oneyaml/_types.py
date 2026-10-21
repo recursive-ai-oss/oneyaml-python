@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator, Mapping
 from typing import Any
 
@@ -16,13 +17,21 @@ class Tagged:
     constructed from a tag.
     """
 
-    __slots__ = ("tag", "value")
+    __slots__ = ("_hash", "tag", "value")
     tag: str
     value: Any
 
     def __init__(self, tag: str, value: Any) -> None:
         object.__setattr__(self, "tag", tag)
         object.__setattr__(self, "value", value)
+        # Hashed once, here, from the value's own stored hash: hashing a deeply nested key later
+        # would otherwise recurse once per level. A value that cannot be hashed (a list or dict)
+        # makes the node unhashable, as it would be without the cache.
+        try:
+            h = hash((tag, value))
+        except TypeError:
+            h = None
+        object.__setattr__(self, "_hash", h)
 
     def __setattr__(self, name, value):
         raise AttributeError("Tagged is immutable")
@@ -33,7 +42,9 @@ class Tagged:
         return self.tag == other.tag and self.value == other.value
 
     def __hash__(self):
-        return hash((self.tag, self.value))
+        if self._hash is None:
+            raise TypeError(f"unhashable type: 'Tagged' holding {type(self.value).__name__}")
+        return self._hash
 
     def __repr__(self):
         return f"Tagged({self.tag!r}, {self.value!r})"
@@ -50,7 +61,11 @@ class FrozenMapping(Mapping):
     def __init__(self, items: Mapping | None = None) -> None:
         # The dict is taken over, not copied: the loader hands over one it has just built.
         self._items = items if type(items) is dict else dict(items or {})
-        self._hash: int | None = None
+        # Hashed once, here, from the children's stored hashes, so hashing never recurses.
+        try:
+            self._hash: int | None = hash(frozenset(self._items.items()))
+        except TypeError:
+            self._hash = None
 
     def __getitem__(self, key):
         return self._items[key]
@@ -66,7 +81,7 @@ class FrozenMapping(Mapping):
 
     def __hash__(self) -> int:
         if self._hash is None:
-            self._hash = hash(frozenset(self._items.items()))
+            raise TypeError("unhashable type: 'FrozenMapping' holding a list or dict")
         return self._hash
 
     def __repr__(self):
@@ -138,8 +153,9 @@ def big_int(text: str) -> int:
     """Convert a decimal integer too long for ``int(text)`` under CPython's digit cap."""
     sign = -1 if text.startswith("-") else 1
     digits = text.lstrip("+-")
-    # Pieces of 1000 digits are under any cap CPython sets by default; join them in base 10**1000.
-    step = 1000
+    # Pieces no longer than the shortest cap CPython allows (and so under whatever cap is set);
+    # join them in base 10**step.
+    step = sys.int_info.str_digits_check_threshold
     head = len(digits) % step
     chunks = [digits[:head]] if head else []
     chunks += [digits[i : i + step] for i in range(head, len(digits), step)]
