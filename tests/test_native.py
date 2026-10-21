@@ -49,6 +49,54 @@ def test_repeated_keys_share_one_string(native):
     assert keys[1] is keys[3] is keys[5]
 
 
+def test_keys_of_every_length_share_one_string(native):
+    # The key cache hashes short keys eight bytes at a time and the tail piecewise; a key of
+    # any length must still be found again.
+    names = [chr(97 + n % 26) * (n % 7 + 1) + str(n) + "é" * (n % 3) for n in range(1, 140)]
+    names += ["k" * n for n in range(1, 131)]
+    text = "".join(f"- {{{', '.join(f'{n}: 1' for n in names[i::2])}}}\n" for i in range(2))
+    text += "".join(f"- {{{', '.join(f'{n}: 1' for n in names[i::2])}}}\n" for i in range(2))
+    rows = oneyaml.loads(text)
+    assert rows[0] == rows[2] and rows[1] == rows[3]
+    for a, b in ((rows[0], rows[2]), (rows[1], rows[3])):
+        for ka, kb in zip(a, b, strict=True):
+            if len(ka) <= 128:
+                assert ka is kb
+
+
+def test_a_load_of_all_different_keys_is_the_same_as_ever(native):
+    # Past a window of lookups without a repeat the key cache switches itself off; what is
+    # loaded, and what is refused, must not depend on it.
+    n = 5000
+    text = "".join(f"id{i}: {i}\n" for i in range(n))
+    assert oneyaml.loads(text) == {f"id{i}": i for i in range(n)}
+    with pytest.raises(YAMLError) as e:
+        oneyaml.loads(text + "id17: again\n")
+    assert e.value.category == "duplicate-key"
+    assert e.value.line == n + 1
+    # Keys that repeat after the switch-off still read as the same keys.
+    rows = oneyaml.loads(text + "rows:\n" + "  - {a: 1, b: 2}\n" * 50)
+    assert rows["rows"] == [{"a": 1, "b": 2}] * 50
+
+
+def test_the_default_limits_object_is_recognised(native):
+    from oneyaml import _api
+
+    # Registered by the package at import: a load with it need not read its fields.
+    assert native._use_default_limits(_api._DEFAULT_LIMITS) is True
+    # Another object with the same values is read as any other limits are.
+    assert native._use_default_limits(oneyaml.Limits()) is False
+    # A limits object that differs is never taken for the default.
+    assert native._use_default_limits(oneyaml.Limits(depth=3)) is False
+    deep = "[" * 5 + "]" * 5
+    with pytest.raises(YAMLError) as e:
+        native.load(deep, oneyaml.Limits(depth=3), False)
+    assert e.value.category == "limit"
+    assert native.load(deep, _api._DEFAULT_LIMITS, False) == native.load(
+        deep, oneyaml.Limits(), False
+    )
+
+
 def test_values_are_not_shared_between_loads(native):
     a = oneyaml.loads("k: [1]")
     b = oneyaml.loads("k: [1]")

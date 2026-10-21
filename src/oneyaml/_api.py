@@ -46,11 +46,16 @@ def loads(data: str | bytes, *, limits: Limits | None = None) -> Any:
         YAMLError: the text is not valid YAML or goes past a limit.
         TypeError: ``data`` is neither text nor bytes, or ``limits`` is not a ``Limits``.
     """
+    # The common call, straight to the backend: one function call less per load.
+    if limits is None and (type(data) is str or type(data) is bytes):
+        return _impl.load(data, _DEFAULT_LIMITS, False)
     return _call(data, limits, False)
 
 
 def loads_all(data: str | bytes, *, limits: Limits | None = None) -> list[Any]:
     """Read every document in ``data``; an empty stream gives an empty list."""
+    if limits is None and (type(data) is str or type(data) is bytes):
+        return _impl.load(data, _DEFAULT_LIMITS, True)
     return _call(data, limits, True)
 
 

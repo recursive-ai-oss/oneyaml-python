@@ -2,9 +2,12 @@
 
 use oneyaml::{Limits, Settings};
 use pyo3::prelude::*;
+use pyo3::sync::PyOnceLock;
+
+static DEFAULT_OBJECT: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 /// Limits as the binding enforces them. A bound of `usize::MAX` means "none".
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Lim {
     pub depth: usize,
     pub nodes_factor: usize,
@@ -34,6 +37,32 @@ impl Lim {
         documents: usize::MAX,
         digits: 4300,
     };
+
+    /// The `Limits()` object that stands for the defaults, once the package has registered it.
+    /// A call with that very object skips reading its fields: a small document is parsed in
+    /// about a microsecond, and reading nine integers out of an object was a tenth of that.
+    /// Only one object is ever held, and it is immutable.
+    pub fn register_default(limits: &Bound<'_, PyAny>) -> PyResult<bool> {
+        // Registered only if it really holds the defaults this build assumes.
+        if Lim::from_py(limits)? != Lim::DEFAULT {
+            return Ok(false);
+        }
+        let py = limits.py();
+        Ok(DEFAULT_OBJECT
+            .get_or_init(py, || limits.clone().unbind())
+            .is(limits))
+    }
+
+    /// Like `from_py`, with the registered default object recognised by identity.
+    #[inline]
+    pub fn of(limits: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if let Some(d) = DEFAULT_OBJECT.get(limits.py())
+            && d.as_ptr() == limits.as_ptr()
+        {
+            return Ok(Lim::DEFAULT);
+        }
+        Lim::from_py(limits)
+    }
 
     /// Read the tuple a `Limits` object keeps in `_native`.
     pub fn from_py(limits: &Bound<'_, PyAny>) -> PyResult<Self> {
