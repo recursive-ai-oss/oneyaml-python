@@ -18,6 +18,7 @@ mod ops;
 mod pyvalue;
 mod reader;
 mod scalar;
+mod writer;
 
 use errors::guarded;
 
@@ -58,6 +59,26 @@ fn load<'py>(
     guarded(py, || reader::load(py, data, limits, multi, mode))
 }
 
+/// Write Python objects as YAML text, one document each. `opts` is
+/// `(indent, flow, explicit_start)`; `multi` only tells a stream from a single document.
+#[pyfunction]
+fn dump<'py>(
+    py: Python<'py>,
+    objs: &Bound<'py, pyo3::types::PyList>,
+    opts: &Bound<'py, PyAny>,
+    multi: bool,
+) -> PyResult<Bound<'py, pyo3::types::PyString>> {
+    let _ = multi;
+    guarded(py, || writer::dump(py, objs, opts))
+}
+
+/// Operations on the dump's on-path set since the last reset (a test reads it to check that
+/// the work is linear in the size of the value).
+#[pyfunction]
+fn _dump_path_ops(reset: bool) -> usize {
+    writer::path_ops(reset)
+}
+
 /// The event stream as yaml-test-suite notation lines.
 #[pyfunction]
 fn events_text<'py>(
@@ -96,6 +117,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ENGINE_VERSION", env!("ONEYAML_ENGINE_VERSION"))?;
     m.add_function(wrap_pyfunction!(probe, m)?)?;
     m.add_function(wrap_pyfunction!(load, m)?)?;
+    m.add_function(wrap_pyfunction!(dump, m)?)?;
+    m.add_function(wrap_pyfunction!(_dump_path_ops, m)?)?;
     m.add_function(wrap_pyfunction!(document::parse, m)?)?;
     m.add_class::<document::Handle>()?;
     m.add_class::<document::Prepared>()?;
