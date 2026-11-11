@@ -4,7 +4,6 @@
 package.** Edit a file or apply a JSON Patch to it and only what you touch
 changes; a native backend and a pure-Python one sit behind the same API.
 
-[![PyPI](https://img.shields.io/pypi/v/oneyaml.svg)](https://pypi.org/project/oneyaml/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://github.com/recursive-ai-oss/oneyaml-python/blob/main/docs/guide.md#install-and-backends)
 [![CI](https://github.com/recursive-ai-oss/oneyaml-python/actions/workflows/ci.yml/badge.svg)](https://github.com/recursive-ai-oss/oneyaml-python/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/recursive-ai-oss/oneyaml-python/blob/main/LICENSE-MIT)
@@ -42,12 +41,11 @@ changes; a native backend and a pure-Python one sit behind the same API.
 
 ## Install
 
-```sh
-pip install oneyaml
-```
+oneyaml isn't on PyPI. To try it, install from a clone:
 
-Where a native wheel exists for your platform, pip installs it; anywhere
-else it installs the pure-Python wheel. Nothing is compiled at install.
+```sh
+pip install ./oneyaml-python
+```
 
 ## Quick start
 
